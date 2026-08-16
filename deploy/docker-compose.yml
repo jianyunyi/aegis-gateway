@@ -1,12 +1,14 @@
 services:
   mysql:
-    image: mysql:8.0
+    # 本地 F 盘 Docker 数据已有镜像；生产环境建议固定 LTS 版本 mysql:8.0
+    image: mysql:latest
     container_name: aegis-mysql
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: aegis
     ports:
-      - "3306:3306"
+      # 宿主机 3303 → 容器 3306（本机 3306 已被其他 MySQL 占用，故避开）
+      - "3303:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -16,7 +18,8 @@ services:
       retries: 20
 
   redis:
-    image: redis:7-alpine
+    # 本地 F 盘已有 redis:7（Debian 版）；-alpine 变体可按需拉取
+    image: redis:7
     container_name: aegis-redis
     ports:
       - "6379:6379"
@@ -35,7 +38,8 @@ services:
       REDIS_ADDR: "redis:6379"
       JWT_SECRET: "dev-secret-change-me"
     ports:
-      - "8080:8080"
+      # 宿主机 8081 → 容器 8080（本机 8080 已被其他服务占用，故避开）
+      - "8081:8080"
     depends_on:
       mysql:
         condition: service_healthy

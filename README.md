@@ -12,7 +12,7 @@
 docker compose -f deploy/docker-compose.yml up -d --build
 
 # 2. 健康检查
-curl http://localhost:8080/healthz
+curl http://localhost:8081/healthz
 
 # 3. 打开管理后台
 open http://localhost:3000        # 登录（M3 里程碑可用）

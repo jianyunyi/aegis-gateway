@@ -21,8 +21,8 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Env:         getEnv("APP_ENV", "dev"),
-		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
-		MySQLDSN:    getEnv("MYSQL_DSN", "root:root@tcp(127.0.0.1:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"),
+		HTTPAddr:    getEnv("HTTP_ADDR", ":8081"),
+		MySQLDSN:    getEnv("MYSQL_DSN", "root:root@tcp(127.0.0.1:3303)/aegis?charset=utf8mb4&parseTime=True&loc=Local"),
 		RedisAddr:   getEnv("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPass:   getEnv("REDIS_PASSWORD", ""),
 		AutoMigrate: getBool("AUTO_MIGRATE", true),
