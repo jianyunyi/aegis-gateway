@@ -1,0 +1,14 @@
+# AEGIS Gateway 多阶段构建
+FROM golang:1.22-alpine AS builder
+WORKDIR /src
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
+
+FROM alpine:3.20
+RUN adduser -D -u 10001 app
+COPY --from=builder /out/gateway /usr/local/bin/gateway
+USER app
+EXPOSE 8080
+ENTRYPOINT ["gateway"]

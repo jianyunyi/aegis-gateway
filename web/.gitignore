@@ -1,0 +1,12 @@
+# 依赖与构建产物
+node_modules/
+.next/
+out/
+
+# 环境变量（含密钥，禁止提交）
+.env
+.env.local
+.env.*.local
+
+# 类型与缓存
+*.tsbuildinfo
