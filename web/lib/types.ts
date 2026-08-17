@@ -159,3 +159,46 @@ export interface EvalDataset {
   created_at: string;
   updated_at: string;
 }
+
+/** 评测样本（与后端 eval_samples 表对齐） */
+export interface EvalSample {
+  id: number;
+  dataset_id: number;
+  prompt: string;
+  reference: string;
+  source: string; // sampled / manual
+  label: number | null; // 1 好 / 0 差 / null 未标
+  created_at: string;
+}
+
+/** 评测运行（与后端 eval_runs 表对齐） */
+export interface EvalRun {
+  id: number;
+  dataset_id: number;
+  model_a: string;
+  model_b: string;
+  status: number; // 0 运行中 1 完成 2 失败
+  score_a: number | null;
+  score_b: number | null;
+  cost_a: number | null;
+  cost_b: number | null;
+  latency_a: number | null;
+  latency_b: number | null;
+  report: string | null; // JSON 字符串（EvalSampleResult[]）
+  created_at: string;
+  finished_at: string | null;
+}
+
+/** 评测单样本结果（与后端 EvalSampleResult 对齐） */
+export interface EvalSampleResult {
+  index: number;
+  prompt: string;
+  score_a: number;
+  latency_a_ms: number;
+  cost_a: number;
+  out_a_preview: string;
+  score_b: number;
+  latency_b_ms: number;
+  cost_b: number;
+  out_b_preview: string;
+}

@@ -56,6 +56,26 @@ func ListEvalSamples(d *Deps) gin.HandlerFunc {
 	}
 }
 
+// AddEvalSample 手动添加评测样本（source=manual）。
+func AddEvalSample(d *Deps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			DatasetID uint64 `json:"dataset_id"`
+			Prompt    string `json:"prompt"`
+			Reference string `json:"reference"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || req.DatasetID == 0 || req.Prompt == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "dataset_id 与 prompt 必填", "data": nil})
+			return
+		}
+		if err := d.Eval.AddSample(req.DatasetID, req.Prompt, req.Reference, "manual"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "添加失败", "data": nil})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": nil})
+	}
+}
+
 // SampleEval 从真实调用日志采样入数据集。
 func SampleEval(d *Deps) gin.HandlerFunc {
 	return func(c *gin.Context) {
