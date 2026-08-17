@@ -40,6 +40,7 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(middleware.CORS())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.AccessLog())
 

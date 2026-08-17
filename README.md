@@ -8,15 +8,19 @@
 ## 快速开始
 
 ```bash
-# 1. 一键启动全栈（MySQL + Redis + 网关 + 管理后台）
+# 1. 一键启动全栈（MySQL + Redis + 网关 + mock 沙箱 + 管理后台）
+#    前置：make build-linux（交叉编译，或由 CI 完成）
 docker compose -f deploy/docker-compose.yml up -d --build
 
 # 2. 健康检查
 curl http://localhost:8081/healthz
 
-# 3. 打开管理后台
-open http://localhost:3000        # 登录（M3 里程碑可用）
+# 3. 打开管理后台（浏览器直连 8081 网关 API，CORS 已放行）
+open http://localhost:3000        # 默认账号 admin / admin123
 ```
+
+> 端口约定：网关 `8081`（容器内 8080）、后台 `3000`、MySQL `3303`、Redis `6379`、mock 沙箱 `8099`。
+> web 镜像构建需要网络（npm ci，走 npmmirror）；无网络时用 `npm run dev` 本地起后台。
 
 本地开发（不经 Docker）：
 

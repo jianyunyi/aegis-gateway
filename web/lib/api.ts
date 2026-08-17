@@ -39,8 +39,12 @@ function extractMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+// API 基地址：容器化部署时通过 NEXT_PUBLIC_API_BASE 指向网关（宿主机 8081），
+// 本地开发默认相对路径走 next.config 重写到 localhost:8081。
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api/v1/admin';
+
 const instance = axios.create({
-  baseURL: '/api/v1/admin',
+  baseURL: API_BASE,
   timeout: 20000,
   headers: { 'Content-Type': 'application/json' },
 });

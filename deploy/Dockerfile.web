@@ -13,8 +13,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/ .
 ENV NEXT_TELEMETRY_DISABLED=1
-# /api 重写目标：compose 网络内网关服务名（本地 dev 默认 localhost:8081）
-ENV NEXT_PUBLIC_API_PROXY=http://gateway:8081
+# 浏览器直连网关 API（宿主机 8081 映射），容器内无需反向重写
+ENV NEXT_PUBLIC_API_BASE=http://localhost:8081/api/v1/admin
 RUN npm run build
 
 FROM node:20-alpine AS runner
