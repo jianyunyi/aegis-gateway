@@ -15,6 +15,7 @@ import (
 	"aegis-gateway/internal/config"
 	"aegis-gateway/internal/repository"
 	"aegis-gateway/internal/router"
+	"aegis-gateway/internal/service"
 )
 
 func main() {
@@ -41,6 +42,20 @@ func main() {
 		slog.Info("database migrated")
 		if *migrateOnly {
 			return
+		}
+	}
+
+	// 演示数据（幂等）：默认管理员、DeepSeek 提供商、模型目录、示例 Key
+	if cfg.SeedData {
+		seedKey, err := service.Seed(repo)
+		if err != nil {
+			slog.Error("seed failed", "error", err)
+			os.Exit(1)
+		}
+		if seedKey != "" {
+			slog.Info("seeded demo api key (show once)", "key", seedKey)
+		} else {
+			slog.Info("seed data already exists, skip")
 		}
 	}
 

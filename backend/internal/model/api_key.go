@@ -11,6 +11,7 @@ type ApiKey struct {
 	UserID      uint64     `gorm:"not null;index" json:"user_id"`
 	Status      int8       `gorm:"not null;default:1" json:"status"` // 1 启用 0 禁用
 	QuotaTokens int64      `gorm:"not null;default:0" json:"quota_tokens"` // 0 表示不限
+	UsedTokens  int64      `gorm:"not null;default:0" json:"used_tokens"`  // 已用 token（M3 对账用）
 	RPSLimit    int        `gorm:"not null;default:10" json:"rps_limit"`
 	Burst       int        `gorm:"not null;default:20" json:"burst"`
 	ExpiresAt   *time.Time `json:"expires_at"`
