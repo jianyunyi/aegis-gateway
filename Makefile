@@ -1,11 +1,15 @@
 # AEGIS 常用命令入口（Windows 无 make 时，见 README 的直接命令对照）
-.PHONY: dev build test vet tidy fmt up down logs ps
+.PHONY: dev build build-linux test vet tidy fmt up down logs ps migrate
 
 dev:        ## 本地运行网关（需先启动 mysql/redis）
 	cd backend && go run ./cmd/gateway
 
-build:      ## 编译网关二进制
-	cd backend && go build -o bin/gateway ./cmd/gateway
+build:      ## 编译网关二进制（Windows）
+	cd backend && go build -o bin/gateway.exe ./cmd/gateway
+
+build-linux: ## 交叉编译 Linux 二进制（docker 离线构建用）
+	cd backend && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/gateway-linux ./cmd/gateway
+	cd backend && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/mockupstream-linux ./cmd/mockupstream
 
 test:       ## 运行后端全部单测（含竞态检测）
 	cd backend && go test ./... -race -count=1

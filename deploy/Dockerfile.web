@@ -1,14 +1,20 @@
-# AEGIS 管理后台多阶段构建（依赖 Next.js output: 'standalone'）
+# AEGIS 管理后台镜像（标准多阶段构建，需网络执行 npm ci）。
+# 说明：node_modules 含平台相关二进制（next-swc），必须用 npm ci 在目标平台安装，
+# 不能复用宿主机 node_modules；无网络环境请用本地 `npm run dev`（见 README）。
 FROM node:20-alpine AS deps
 WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV npm_config_registry=https://registry.npmmirror.com
 COPY web/package.json web/package-lock.json* ./
-RUN npm ci || npm install
+RUN npm ci --no-audit --no-fund
 
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/ .
 ENV NEXT_TELEMETRY_DISABLED=1
+# /api 重写目标：compose 网络内网关服务名（本地 dev 默认 localhost:8081）
+ENV NEXT_PUBLIC_API_PROXY=http://gateway:8081
 RUN npm run build
 
 FROM node:20-alpine AS runner

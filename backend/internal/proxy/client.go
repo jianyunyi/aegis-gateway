@@ -107,3 +107,29 @@ func CopyBody(r io.ReadCloser) ([]byte, error) {
 	defer r.Close()
 	return io.ReadAll(r)
 }
+
+// ParseUsageFromBody 从非流式响应体解析 token 用量。
+func ParseUsageFromBody(raw []byte) (prompt, completion int) {
+	var r struct {
+		Usage *Usage `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil || r.Usage == nil {
+		return 0, 0
+	}
+	return r.Usage.PromptTokens, r.Usage.CompletionTokens
+}
+
+// ParseContentFromBody 提取非流式响应首条 message content（评测打分用）。
+func ParseContentFromBody(raw []byte) string {
+	var r struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil || len(r.Choices) == 0 {
+		return ""
+	}
+	return r.Choices[0].Message.Content
+}

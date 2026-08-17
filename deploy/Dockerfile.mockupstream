@@ -1,0 +1,7 @@
+# Mock 上游运行时镜像（离线构建，演示沙箱用）。
+FROM alpine:3.20
+RUN adduser -D -u 10001 app
+COPY backend/bin/mockupstream-linux /usr/local/bin/mockupstream
+USER app
+EXPOSE 8099
+ENTRYPOINT ["mockupstream"]

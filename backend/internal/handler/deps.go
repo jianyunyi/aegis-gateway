@@ -20,6 +20,7 @@ type Deps struct {
 	Models    *service.ModelService
 	Stats     *service.StatsService
 	Billing   *service.BillingService
+	Eval      *service.EvalService
 	Router    *routing.Router
 	Cache     *responsecache.Cache
 	Budget    *budget.Budget

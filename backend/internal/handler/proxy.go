@@ -46,6 +46,15 @@ func (r openaiChatReq) promptText() string {
 	return t
 }
 
+// promptPreview 截断为 500 字（评测采样用；企业版此处应接脱敏）。
+func (r openaiChatReq) promptPreview() string {
+	t := r.promptText()
+	if len([]rune(t)) > 500 {
+		t = string([]rune(t)[:500])
+	}
+	return t
+}
+
 // ---- 辅助 ----
 
 func abortOpenAI(c *gin.Context, status int, msg string) {
@@ -143,7 +152,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		if !req.Stream {
 			cacheKey := chatCacheKey(target.Name, body)
 			if cachedBody, hit := d.Cache.Get(c, cacheKey); hit {
-				prompt, completion := usageFromBody([]byte(cachedBody))
+				prompt, completion := proxy.ParseUsageFromBody([]byte(cachedBody))
 				log := newUsageLog(apiKey, target, requestID, start)
 				log.PromptTokens = prompt
 				log.CompletionTokens = completion
@@ -153,6 +162,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 				log.Cached = 1
 				log.RoutedBy = dec.RoutedBy
 				log.UpstreamModel = dec.Requested
+				log.PromptPreview = req.promptPreview()
 				persistUsage(d.Repo, apiKey, log)
 				c.Data(http.StatusOK, "application/json", []byte(cachedBody))
 				return
@@ -225,7 +235,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		}
 
 		if req.Stream {
-			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body)
+			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body, req.promptPreview())
 			return
 		}
 
@@ -235,7 +245,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 			abortOpenAI(c, http.StatusBadGateway, "读取上游响应失败")
 			return
 		}
-		prompt, completion := usageFromBody(raw)
+		prompt, completion := proxy.ParseUsageFromBody(raw)
 		log := newUsageLog(apiKey, target, requestID, start)
 		log.PromptTokens = prompt
 		log.CompletionTokens = completion
@@ -244,6 +254,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		log.LatencyMs = int(time.Since(start).Milliseconds())
 		log.RoutedBy = dec.RoutedBy
 		log.UpstreamModel = dec.Requested
+		log.PromptPreview = req.promptPreview()
 		persistUsage(d.Repo, apiKey, log)
 
 		// 计费：预算累计（仅对设置了月度预算的 Key 生效）
@@ -257,17 +268,6 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 	}
 }
 
-// usageFromBody 从 OpenAI 响应体解析 token 用量。
-func usageFromBody(raw []byte) (prompt, completion int) {
-	var r struct {
-		Usage *proxy.Usage `json:"usage"`
-	}
-	if err := json.Unmarshal(raw, &r); err != nil || r.Usage == nil {
-		return 0, 0
-	}
-	return r.Usage.PromptTokens, r.Usage.CompletionTokens
-}
-
 // chatCacheKey 缓存键 = 实际路由模型名 + 请求体（保证同请求同模型才命中）。
 func chatCacheKey(modelName string, body []byte) string {
 	key := make([]byte, 0, len(modelName)+1+len(body))
@@ -278,7 +278,7 @@ func chatCacheKey(modelName string, body []byte) string {
 }
 
 // streamChatForward SSE 逐块转发上游响应，统计 TTFT 与 usage。
-func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader) {
+func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader, preview string) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -333,11 +333,21 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 	log.ErrorCode = errCode
 	log.RoutedBy = dec.RoutedBy
 	log.UpstreamModel = dec.Requested
+	log.PromptPreview = truncateRunes(preview, 500)
 	persistUsage(d.Repo, apiKey, log)
 
 	if log.Cost > 0 && apiKey.BudgetMonthly > 0 {
 		_ = d.Budget.Add(c, apiKey.ID, log.Cost)
 	}
+}
+
+// truncateRunes 按字符截断（安全处理多字节 UTF-8）。
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 // Completions 处理 POST /v1/completions（透传，非流式）。

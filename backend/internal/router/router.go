@@ -31,6 +31,7 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 		Models:    service.NewModelService(repo),
 		Stats:     service.NewStatsService(repo),
 		Billing:   service.NewBillingService(repo),
+		Eval:      service.NewEvalService(repo, service.NewProviderService(repo, cfg.JWTSecret), service.NewModelService(repo), proxy.NewUpstreamClient(cfg.UpstreamTimeout)),
 		Router:    routing.NewRouter(repo),
 		Cache:     responsecache.New(repo.Redis, cfg.CacheTTL),
 		Budget:    budget.New(repo.Redis),
@@ -78,11 +79,15 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 			authed.GET("/billing/daily", handler.BillingDaily(d))
 			authed.POST("/billing/reconcile", handler.BillingReconcile(d))
 
-			// M5 评测飞轮实现
-			authed.POST("/evals/datasets", handler.AdminStub("evals/datasets"))
-			authed.GET("/evals/datasets", handler.AdminStub("evals/datasets"))
-			authed.POST("/evals/runs", handler.AdminStub("evals/runs"))
-			authed.GET("/evals/runs/:id/report", handler.AdminStub("evals/runs/report"))
+			// M5 评测飞轮
+			authed.GET("/evals/datasets", handler.ListEvalDatasets(d))
+			authed.POST("/evals/datasets", handler.CreateEvalDataset(d))
+			authed.GET("/evals/datasets/:id/samples", handler.ListEvalSamples(d))
+			authed.POST("/evals/datasets/:id/sample", handler.SampleEval(d))
+			authed.POST("/evals/samples/:id/label", handler.LabelEvalSample(d))
+			authed.GET("/evals/runs", handler.ListEvalRuns(d))
+			authed.POST("/evals/runs", handler.RunEval(d))
+			authed.GET("/evals/runs/:id/report", handler.GetEvalReport(d))
 		}
 	}
 

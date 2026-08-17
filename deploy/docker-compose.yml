@@ -26,13 +26,23 @@ services:
     volumes:
       - redis-data:/data
 
+  mockupstream:
+    # 演示沙箱上游（OpenAI 兼容 mock），无需真实 API Key
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.mockupstream
+    container_name: aegis-mockupstream
+    ports:
+      - "8099:8099"
+
   gateway:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
     container_name: aegis-gateway
     environment:
-      APP_ENV: dev
+      APP_ENV: prod
+      GIN_MODE: release
       HTTP_ADDR: ":8080"
       MYSQL_DSN: "root:root@tcp(mysql:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
       REDIS_ADDR: "redis:6379"
@@ -44,6 +54,8 @@ services:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_started
+      mockupstream:
         condition: service_started
 
   web:

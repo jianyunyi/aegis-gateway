@@ -22,6 +22,7 @@ type UsageLog struct {
 	Cached           int8      `gorm:"not null;default:0" json:"cached"`
 	RoutedBy         string    `gorm:"size:16" json:"routed_by"` // manual / rule / heuristic / llm
 	UpstreamModel    string    `gorm:"size:64" json:"upstream_model"`
+	PromptPreview    string    `gorm:"size:500" json:"prompt_preview"` // 截断的 prompt（评测采样用；企业版需脱敏）
 	CreatedAt        time.Time `gorm:"index:idx_key_time,priority:2;index:idx_model_time,priority:2" json:"created_at"`
 }
 

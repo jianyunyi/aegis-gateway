@@ -42,7 +42,7 @@ type EvalRun struct {
 	CostB      float64    `gorm:"type:decimal(12,6)" json:"cost_b"`
 	LatencyA   int        `json:"latency_a"` // 平均延迟 ms
 	LatencyB   int        `json:"latency_b"`
-	Report     string     `gorm:"type:json" json:"report"` // 详细报告（逐样本结果）
+	Report     *string    `gorm:"type:json" json:"report"` // 详细报告（逐样本结果）；nil 时不写入
 	CreatedAt  time.Time  `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at"`
 }

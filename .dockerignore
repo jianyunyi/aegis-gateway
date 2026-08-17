@@ -1,0 +1,8 @@
+.git
+.cache
+docs
+*.md
+backend/bin/*.exe
+backend/bin/loadtest.exe
+web/.next
+web/node_modules/.cache
