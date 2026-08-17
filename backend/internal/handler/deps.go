@@ -15,5 +15,7 @@ type Deps struct {
 	Keys      *service.KeyService
 	Providers *service.ProviderService
 	Models    *service.ModelService
+	Stats     *service.StatsService
+	Billing   *service.BillingService
 	Upstream  *proxy.UpstreamClient
 }

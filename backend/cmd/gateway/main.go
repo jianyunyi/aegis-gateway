@@ -61,6 +61,11 @@ func main() {
 
 	r := router.New(cfg, repo)
 
+	// 计费对账定时任务（goroutine，随进程生命周期）
+	billingCtx, billingCancel := context.WithCancel(context.Background())
+	defer billingCancel()
+	service.NewBillingService(repo).StartTicker(billingCtx, cfg.BillingInterval)
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           r,

@@ -18,7 +18,8 @@ type Config struct {
 	JWTSecret       string        // 管理后台 JWT 签名密钥
 	JWTExpire       time.Duration // JWT 有效期
 	UpstreamTimeout time.Duration // 上游调用超时
-	SeedData        bool          // 首次启动写入演示数据
+	SeedData            bool          // 首次启动写入演示数据
+	BillingInterval     time.Duration // 计费对账定时任务间隔（0=禁用）
 }
 
 // Load 从环境变量加载配置，未设置时使用本地开发默认值。
@@ -34,6 +35,7 @@ func Load() *Config {
 		JWTExpire:       getDuration("JWT_EXPIRE_MINUTES", 12*60),
 		UpstreamTimeout: getDuration("UPSTREAM_TIMEOUT_SECONDS", 180),
 		SeedData:        getBool("SEED_DATA", true),
+		BillingInterval: getDuration("BILLING_INTERVAL_MINUTES", 5),
 	}
 }
 

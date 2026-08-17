@@ -26,6 +26,8 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 		Keys:      service.NewKeyService(repo),
 		Providers: service.NewProviderService(repo, cfg.JWTSecret),
 		Models:    service.NewModelService(repo),
+		Stats:     service.NewStatsService(repo),
+		Billing:   service.NewBillingService(repo),
 		Upstream:  proxy.NewUpstreamClient(cfg.UpstreamTimeout),
 	}
 
@@ -63,11 +65,14 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 			authed.GET("/models", handler.ListModels(d))
 			authed.POST("/models", handler.CreateModel(d))
 
-			// M3 里程碑实现
-			authed.GET("/stats/overview", handler.AdminStub("stats/overview"))
-			authed.GET("/stats/trends", handler.AdminStub("stats/trends"))
-			authed.GET("/logs", handler.AdminStub("logs"))
-			authed.GET("/billing/daily", handler.AdminStub("billing/daily"))
+			// M3 计费与观测
+			authed.GET("/stats/overview", handler.StatsOverview(d))
+			authed.GET("/stats/trends", handler.StatsTrends(d))
+			authed.GET("/logs", handler.ListLogs(d))
+			authed.GET("/billing/daily", handler.BillingDaily(d))
+			authed.POST("/billing/reconcile", handler.BillingReconcile(d))
+
+			// M5 评测飞轮实现
 			authed.POST("/evals/datasets", handler.AdminStub("evals/datasets"))
 			authed.GET("/evals/datasets", handler.AdminStub("evals/datasets"))
 			authed.POST("/evals/runs", handler.AdminStub("evals/runs"))
