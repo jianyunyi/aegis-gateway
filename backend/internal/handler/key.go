@@ -30,11 +30,13 @@ func ListKeys(d *Deps) gin.HandlerFunc {
 func CreateKey(d *Deps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Name        string     `json:"name"`
-			RPSLimit    int        `json:"rps_limit"`
-			Burst       int        `json:"burst"`
-			QuotaTokens int64      `json:"quota_tokens"`
-			ExpiresAt   *time.Time `json:"expires_at"`
+			Name          string     `json:"name"`
+			RPSLimit      int        `json:"rps_limit"`
+			Burst         int        `json:"burst"`
+			QuotaTokens   int64      `json:"quota_tokens"`
+			DefaultModel  string     `json:"default_model"`
+			BudgetMonthly float64    `json:"budget_monthly"`
+			ExpiresAt     *time.Time `json:"expires_at"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "name 必填", "data": nil})
@@ -49,7 +51,7 @@ func CreateKey(d *Deps) gin.HandlerFunc {
 		userID, _ := c.Get(middleware.CtxUserID)
 		uid := toUint64(userID)
 
-		key, token, err := d.Keys.Create(uid, req.Name, req.RPSLimit, req.Burst, req.QuotaTokens, req.ExpiresAt)
+		key, token, err := d.Keys.Create(uid, req.Name, req.RPSLimit, req.Burst, req.QuotaTokens, req.DefaultModel, req.BudgetMonthly, req.ExpiresAt)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "创建失败", "data": nil})
 			return

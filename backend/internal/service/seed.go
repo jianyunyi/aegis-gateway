@@ -67,7 +67,7 @@ func Seed(repo *repository.Repository) (seedKey string, err error) {
 	}
 	if keyCount == 0 {
 		ks := NewKeyService(repo)
-		_, token, err := ks.Create(1, "demo", 10, 20, 0, nil)
+		_, token, err := ks.Create(1, "demo", 10, 20, 0, "", 0, nil)
 		if err != nil {
 			return "", err
 		}

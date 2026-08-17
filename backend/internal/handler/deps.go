@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"aegis-gateway/internal/budget"
 	"aegis-gateway/internal/config"
 	"aegis-gateway/internal/proxy"
 	"aegis-gateway/internal/repository"
+	"aegis-gateway/internal/responsecache"
+	"aegis-gateway/internal/routing"
 	"aegis-gateway/internal/service"
 )
 
@@ -17,5 +20,8 @@ type Deps struct {
 	Models    *service.ModelService
 	Stats     *service.StatsService
 	Billing   *service.BillingService
+	Router    *routing.Router
+	Cache     *responsecache.Cache
+	Budget    *budget.Budget
 	Upstream  *proxy.UpstreamClient
 }

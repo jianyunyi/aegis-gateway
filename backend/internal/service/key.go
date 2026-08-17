@@ -21,7 +21,7 @@ func NewKeyService(repo *repository.Repository) *KeyService {
 }
 
 // Create 生成新 Key：明文仅此一次返回，库中只存 SHA-256 哈希与展示前缀（ADR-007）。
-func (s *KeyService) Create(userID uint64, name string, rps, burst int, quota int64, expiresAt *time.Time) (*model.ApiKey, string, error) {
+func (s *KeyService) Create(userID uint64, name string, rps, burst int, quota int64, defaultModel string, budgetMonthly float64, expiresAt *time.Time) (*model.ApiKey, string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, "", err
@@ -30,15 +30,17 @@ func (s *KeyService) Create(userID uint64, name string, rps, burst int, quota in
 	sum := sha256.Sum256([]byte(token))
 
 	key := &model.ApiKey{
-		Name:        name,
-		KeyHash:     hex.EncodeToString(sum[:]),
-		KeyPrefix:   token[:len("ak_")+8],
-		UserID:      userID,
-		Status:      1,
-		QuotaTokens: quota,
-		RPSLimit:    rps,
-		Burst:       burst,
-		ExpiresAt:   expiresAt,
+		Name:          name,
+		KeyHash:       hex.EncodeToString(sum[:]),
+		KeyPrefix:     token[:len("ak_")+8],
+		UserID:        userID,
+		Status:        1,
+		QuotaTokens:   quota,
+		DefaultModel:  defaultModel,
+		BudgetMonthly: budgetMonthly,
+		RPSLimit:      rps,
+		Burst:         burst,
+		ExpiresAt:     expiresAt,
 	}
 	if err := s.repo.DB.Create(key).Error; err != nil {
 		return nil, "", err

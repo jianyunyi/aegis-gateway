@@ -4,11 +4,14 @@ package router
 import (
 	"github.com/gin-gonic/gin"
 
+	"aegis-gateway/internal/budget"
 	"aegis-gateway/internal/config"
 	"aegis-gateway/internal/handler"
 	"aegis-gateway/internal/middleware"
 	"aegis-gateway/internal/proxy"
 	"aegis-gateway/internal/repository"
+	"aegis-gateway/internal/responsecache"
+	"aegis-gateway/internal/routing"
 	"aegis-gateway/internal/service"
 )
 
@@ -28,6 +31,9 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 		Models:    service.NewModelService(repo),
 		Stats:     service.NewStatsService(repo),
 		Billing:   service.NewBillingService(repo),
+		Router:    routing.NewRouter(repo),
+		Cache:     responsecache.New(repo.Redis, cfg.CacheTTL),
+		Budget:    budget.New(repo.Redis),
 		Upstream:  proxy.NewUpstreamClient(cfg.UpstreamTimeout),
 	}
 

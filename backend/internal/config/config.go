@@ -20,6 +20,7 @@ type Config struct {
 	UpstreamTimeout time.Duration // 上游调用超时
 	SeedData            bool          // 首次启动写入演示数据
 	BillingInterval     time.Duration // 计费对账定时任务间隔（0=禁用）
+	CacheTTL            time.Duration // 请求缓存 TTL
 }
 
 // Load 从环境变量加载配置，未设置时使用本地开发默认值。
@@ -36,6 +37,7 @@ func Load() *Config {
 		UpstreamTimeout: getDuration("UPSTREAM_TIMEOUT_SECONDS", 180),
 		SeedData:        getBool("SEED_DATA", true),
 		BillingInterval: getDuration("BILLING_INTERVAL_MINUTES", 5),
+		CacheTTL:        getSeconds("CACHE_TTL_SECONDS", 600),
 	}
 }
 
@@ -64,4 +66,15 @@ func getDuration(key string, defMinutes int) time.Duration {
 		}
 	}
 	return time.Duration(v) * time.Minute
+}
+
+// getSeconds 读取秒数（int），转换为 time.Duration。
+func getSeconds(key string, defSeconds int) time.Duration {
+	v := defSeconds
+	if s := os.Getenv(key); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			v = n
+		}
+	}
+	return time.Duration(v) * time.Second
 }
