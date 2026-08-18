@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Button, Layout, Menu, Space, Typography } from 'antd';
+import { Button, Layout, Menu, Space, theme, Typography } from 'antd';
 import {
   AccountBookOutlined,
   CloudServerOutlined,
@@ -35,6 +35,7 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
   const pathname = usePathname();
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
+  const { token } = theme.useToken();
 
   // 未登录时跳转登录页（客户端挂载后执行，避免 SSR 访问 localStorage）
   useEffect(() => {
@@ -61,21 +62,40 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
   }
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider theme="dark" breakpoint="lg" collapsedWidth={64}>
+    <Layout style={{ minHeight: '100vh', background: token.colorBgLayout }}>
+      <Sider
+        theme="dark"
+        breakpoint="lg"
+        collapsedWidth={64}
+        style={{ background: token.colorPrimaryActive }}
+      >
         <div
+          className="aegis-brand"
           style={{
-            height: 56,
             display: 'flex',
-            alignItems: 'center',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
             justifyContent: 'center',
+            padding: `0 ${token.paddingLG}px`,
+            background: token.colorPrimaryActive,
           }}
         >
-          <Typography.Text strong style={{ color: '#fff', fontSize: 18 }}>
+          <Typography.Text strong style={{ color: token.colorWhite, fontSize: 18, letterSpacing: 1 }}>
             AEGIS
+          </Typography.Text>
+          <Typography.Text
+            style={{
+              color: token.colorWhite,
+              fontSize: token.fontSizeSM,
+              letterSpacing: 1.5,
+              opacity: 0.68,
+            }}
+          >
+            AI GATEWAY
           </Typography.Text>
         </div>
         <Menu
+          className="aegis-menu"
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
@@ -85,13 +105,13 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
       </Sider>
       <Layout>
         <Header
+          className="aegis-header"
           style={{
-            background: '#fff',
-            padding: '0 24px',
+            background: token.colorBgContainer,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'flex-end',
-            borderBottom: '1px solid #f0f0f0',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
           <Space size="middle">
@@ -101,8 +121,52 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
             </Button>
           </Space>
         </Header>
-        <Content style={{ margin: 16 }}>{children}</Content>
+        <Content
+          className="aegis-content"
+          style={{
+            width: '100%',
+            maxWidth: 1440,
+            margin: '0 auto',
+            padding: `${token.paddingLG}px ${token.paddingLG}px`,
+          }}
+        >
+          {children}
+        </Content>
       </Layout>
+      <style jsx global>{`
+        .aegis-brand {
+          height: 72px;
+        }
+
+        .aegis-menu.ant-menu-dark {
+          background: ${token.colorPrimaryActive};
+        }
+
+        .aegis-menu.ant-menu-dark .ant-menu-item-selected {
+          background: ${token.colorPrimaryBg};
+          color: ${token.colorWhite};
+          box-shadow: inset 3px 0 0 ${token.colorPrimary};
+        }
+
+        .aegis-menu.ant-menu-dark .ant-menu-item-selected .ant-menu-item-icon,
+        .aegis-menu.ant-menu-dark .ant-menu-item-selected a {
+          color: ${token.colorWhite};
+        }
+
+        .aegis-header {
+          padding: 0 ${token.paddingLG}px;
+        }
+
+        @media (max-width: 575px) {
+          .aegis-header {
+            padding: 0 ${token.padding}px;
+          }
+
+          .aegis-content {
+            padding: ${token.padding}px !important;
+          }
+        }
+      `}</style>
     </Layout>
   );
 }
