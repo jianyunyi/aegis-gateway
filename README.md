@@ -2,6 +2,8 @@
 
 > **AEGIS** — An Enterprise LLM Gateway & Intelligence Platform: unified access, routing, rate-limiting, billing, observability, and model evaluation for multiple LLM providers.
 
+🌐 [English README](README.en.md)
+
 统一的企业大模型接入网关：**路由、限流、计费、观测、评测**一站式平台。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
