@@ -52,9 +52,14 @@ export default function BillingPage() {
 
   return (
     <SideLayout>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>
-        每日账单
-      </Typography.Title>
+      <div className="aegis-page-header">
+        <div>
+          <Typography.Title level={4}>每日账单</Typography.Title>
+          <Typography.Paragraph className="aegis-page-header-description">
+            按日核对请求量、Token 使用与模型成本
+          </Typography.Paragraph>
+        </div>
+      </div>
 
       {loading && (
         <div style={{ textAlign: 'center', padding: 80 }}>

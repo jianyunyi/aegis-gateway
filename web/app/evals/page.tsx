@@ -402,13 +402,14 @@ export default function EvalsPage() {
 
   return (
     <SideLayout>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>
-        评测
-      </Typography.Title>
-      <Typography.Paragraph type="secondary">
-        评测飞轮：从真实调用中采样积累样本 → 人工打标 → 一键 A/B 回归对比模型
-        （质量分 + 成本 + 延迟），为模型选型提供数据支撑。
-      </Typography.Paragraph>
+      <div className="aegis-page-header">
+        <div>
+          <Typography.Title level={4}>评测</Typography.Title>
+          <Typography.Paragraph className="aegis-page-header-description">
+            从真实调用采样、人工打标到 A/B 回归，沉淀模型选型依据
+          </Typography.Paragraph>
+        </div>
+      </div>
 
       {loadingDs && (
         <div style={{ textAlign: 'center', padding: 80 }}>
@@ -419,9 +420,9 @@ export default function EvalsPage() {
       {!loadingDs && error && <ErrorState description={error} onRetry={() => void loadDatasets()} />}
 
       {!loadingDs && !error && (
-        <Row gutter={16}>
+        <Row gutter={[20, 20]}>
           {/* 左侧：数据集 */}
-          <Col span={8}>
+          <Col xs={24} lg={8}>
             <Card
               title="评测数据集"
               extra={
@@ -456,7 +457,7 @@ export default function EvalsPage() {
           </Col>
 
           {/* 右侧：样本与评测 */}
-          <Col span={16}>
+          <Col xs={24} lg={16}>
             {!selected ? (
               <Card>
                 <Empty description="请先选择或创建一个数据集" />

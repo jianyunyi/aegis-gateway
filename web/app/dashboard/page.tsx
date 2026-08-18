@@ -82,9 +82,14 @@ export default function DashboardPage() {
 
   return (
     <SideLayout>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>
-        仪表盘
-      </Typography.Title>
+      <div className="aegis-page-header">
+        <div>
+          <Typography.Title level={4}>仪表盘</Typography.Title>
+          <Typography.Paragraph className="aegis-page-header-description">
+            监控今日调用、成本与模型稳定性
+          </Typography.Paragraph>
+        </div>
+      </div>
 
       {loading && (
         <div style={{ textAlign: 'center', padding: 80 }}>

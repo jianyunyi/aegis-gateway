@@ -95,9 +95,14 @@ export default function LogsPage() {
 
   return (
     <SideLayout>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>
-        调用日志
-      </Typography.Title>
+      <div className="aegis-page-header">
+        <div>
+          <Typography.Title level={4}>调用日志</Typography.Title>
+          <Typography.Paragraph className="aegis-page-header-description">
+            追踪请求状态、模型延迟与调用成本
+          </Typography.Paragraph>
+        </div>
+      </div>
 
       {loading && (
         <div style={{ textAlign: 'center', padding: 80 }}>
@@ -108,20 +113,19 @@ export default function LogsPage() {
       {!loading && error && <ErrorState description={error} />}
 
       {!loading && !error && (
-        <Card
-          title="全量调用日志"
-          extra={
+        <Card title="全量调用日志">
+          <div className="aegis-toolbar" style={{ marginBottom: 16 }}>
+            <Typography.Text type="secondary">按模型名称筛选调用记录</Typography.Text>
             <Input.Search
               allowClear
               placeholder="按模型名筛选，例如 gpt-4o"
-              style={{ width: 280 }}
+              style={{ width: 280, maxWidth: '100%' }}
               onSearch={(value) => {
                 setModelName(value.trim());
                 setPage(1);
               }}
             />
-          }
-        >
+          </div>
           <Table
             rowKey="id"
             columns={columns}

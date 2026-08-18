@@ -159,7 +159,39 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
           padding: 0 ${token.paddingLG}px;
         }
 
+        .aegis-page-header {
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 24px;
+          margin-bottom: 24px;
+        }
+
+        .aegis-page-header .ant-typography {
+          margin-bottom: 0;
+        }
+
+        .aegis-page-header-description {
+          margin: 6px 0 0 !important;
+          color: ${token.colorTextSecondary};
+        }
+
+        .aegis-toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          flex-wrap: wrap;
+        }
+
         @media (max-width: 575px) {
+          .aegis-page-header {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 16px;
+          }
+
           .aegis-header {
             padding: 0 ${token.padding}px;
           }

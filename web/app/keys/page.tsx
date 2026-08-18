@@ -183,9 +183,14 @@ export default function KeysPage() {
 
   return (
     <SideLayout>
-      <Typography.Title level={4} style={{ marginTop: 0 }}>
-        Key 管理
-      </Typography.Title>
+      <div className="aegis-page-header">
+        <div>
+          <Typography.Title level={4}>Key 管理</Typography.Title>
+          <Typography.Paragraph className="aegis-page-header-description">
+            管理调用凭证、速率限制与 Token 配额
+          </Typography.Paragraph>
+        </div>
+      </div>
 
       {createdKey && (
         <Alert
@@ -219,14 +224,13 @@ export default function KeysPage() {
       {!loading && error && <ErrorState description={error} />}
 
       {!loading && !error && (
-        <Card
-          title="Key 列表"
-          extra={
+        <Card title="Key 列表">
+          <div className="aegis-toolbar" style={{ marginBottom: 16 }}>
+            <Typography.Text type="secondary">共 {list.length} 个凭证</Typography.Text>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleOpen}>
               新建 Key
             </Button>
-          }
-        >
+          </div>
           <Table
             rowKey="id"
             columns={columns}
