@@ -47,7 +47,9 @@ services:
       HTTP_ADDR: ":8080"
       MYSQL_DSN: "root:root@tcp(mysql:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
       REDIS_ADDR: "redis:6379"
-      JWT_SECRET: "dev-secret-change-me"
+      # 密钥从项目根 .env 注入（.env 不入库）；未设置时用本地开发默认值
+      JWT_SECRET: "${JWT_SECRET:-dev-secret-change-me}"
+      SEED_DATA: "${SEED_DATA:-false}"
     ports:
       # 宿主机 8081 → 容器 8080（本机 8080 已被其他服务占用，故避开）
       - "8081:8080"
