@@ -54,7 +54,9 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
 
   // 菜单高亮：按当前路径前缀匹配
   const selectedKey =
-    MENU_ITEMS.find((item) => pathname?.startsWith(item.key))?.key ?? '/dashboard';
+    MENU_ITEMS.find(
+      (item) => pathname === item.key || pathname?.startsWith(`${item.key}/`),
+    )?.key ?? '/dashboard';
 
   // 未登录时不渲染业务内容，避免子页面抢先发起带 token 的请求
   if (!authed) {
@@ -143,9 +145,9 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
         }
 
         .aegis-menu.ant-menu-dark .ant-menu-item-selected {
-          background: ${token.colorPrimaryBg};
+          background: ${token.colorPrimary};
           color: ${token.colorWhite};
-          box-shadow: inset 3px 0 0 ${token.colorPrimary};
+          box-shadow: inset 3px 0 0 ${token.colorWhite};
         }
 
         .aegis-menu.ant-menu-dark .ant-menu-item-selected .ant-menu-item-icon,
