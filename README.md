@@ -61,6 +61,18 @@ Windows 无 make 时的命令对照：`make up` → `docker compose -f deploy/do
 | 评测飞轮 | 真实调用采样 → 人工打标 → A/B 模型回归（质量分 + 成本 + 延迟报告与选型结论） |
 | 管理后台 | Next.js + AntD：登录 / 大盘 / Key / 提供商 / 模型 / 日志 / 账单 / 评测 |
 
+## 界面预览
+
+| 管理后台 · 大盘 | 评测 · 样本管理 |
+|---|---|
+| ![dashboard](docs/images/dashboard.png) | ![evals](docs/images/evals.png) |
+
+| 评测 · A/B 报告 | 调用日志 |
+|---|---|
+| ![eval-report](docs/images/eval-report.png) | ![logs](docs/images/logs.png) |
+
+> 截图由 `scripts/screenshot.mjs` 自动生成（Playwright 无头浏览器，见脚本注释）。
+
 ## 架构概览
 
 ```
