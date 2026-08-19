@@ -260,7 +260,7 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
         .aegis-table-card .ant-table-thead > tr > th {
           font-size: 12px;
           font-weight: 700;
-          color: #81756a;
+          color: #6e6358;
         }
 
         .aegis-table-card .ant-table-tbody > tr > td {
@@ -272,7 +272,7 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
         }
 
         .aegis-metric-card .ant-statistic-title {
-          color: #8b7f73;
+          color: #6e6358;
           font-size: 12px;
         }
 
@@ -319,7 +319,7 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
 
         .aegis-page-header-kicker.ant-typography {
           display: block;
-          color: #8b7f73;
+          color: #6e6358;
           font-size: 12px;
           font-weight: 760;
           letter-spacing: 0.12em;

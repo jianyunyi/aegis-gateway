@@ -27,5 +27,12 @@
     "eslint": "^8.57.0",
     "eslint-config-next": "^14.2.4",
     "typescript": "^5.4.5"
-  }
+  },
+  "browserslist": [
+    "chrome >= 90",
+    "edge >= 90",
+    "firefox >= 88",
+    "safari >= 14",
+    "ios_saf >= 14"
+  ]
 }

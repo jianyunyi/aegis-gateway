@@ -53,7 +53,7 @@ export default function DashboardPage() {
     ink: '#20242a',
     accent: '#ff6b4a',
     textSecondary: '#6d6257',
-    textFaint: '#8b7f73',
+    textFaint: '#6e6358',
     grid: '#e8dfd2',
     axis: '#ded5c7',
     surface: '#fffaf1',
