@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -30,15 +31,19 @@ func ListKeys(d *Deps) gin.HandlerFunc {
 func CreateKey(d *Deps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Name          string     `json:"name"`
-			RPSLimit      int        `json:"rps_limit"`
-			Burst         int        `json:"burst"`
-			QuotaTokens   int64      `json:"quota_tokens"`
-			DefaultModel  string     `json:"default_model"`
-			BudgetMonthly float64    `json:"budget_monthly"`
-			ExpiresAt     *time.Time `json:"expires_at"`
+			Name          string  `json:"name"`
+			RPSLimit      int     `json:"rps_limit"`
+			Burst         int     `json:"burst"`
+			QuotaTokens   int64   `json:"quota_tokens"`
+			DefaultModel  string  `json:"default_model"`
+			BudgetMonthly float64 `json:"budget_monthly"`
+			ExpiresAt     string  `json:"expires_at"`
 		}
-		if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "请求参数格式错误", "data": nil})
+			return
+		}
+		if req.Name == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "name 必填", "data": nil})
 			return
 		}
@@ -48,10 +53,20 @@ func CreateKey(d *Deps) gin.HandlerFunc {
 		if req.Burst <= 0 {
 			req.Burst = 20
 		}
+		// 兼容宽松时间格式（RFC3339 / "YYYY-MM-DD HH:mm:ss" / 纯日期）
+		var expiresAt *time.Time
+		if req.ExpiresAt != "" {
+			t, err := parseTimeFlexible(req.ExpiresAt)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "expires_at 格式无效，请使用 YYYY-MM-DD HH:mm:ss", "data": nil})
+				return
+			}
+			expiresAt = &t
+		}
 		userID, _ := c.Get(middleware.CtxUserID)
 		uid := toUint64(userID)
 
-		key, token, err := d.Keys.Create(uid, req.Name, req.RPSLimit, req.Burst, req.QuotaTokens, req.DefaultModel, req.BudgetMonthly, req.ExpiresAt)
+		key, token, err := d.Keys.Create(uid, req.Name, req.RPSLimit, req.Burst, req.QuotaTokens, req.DefaultModel, req.BudgetMonthly, expiresAt)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "创建失败", "data": nil})
 			return
@@ -61,6 +76,23 @@ func CreateKey(d *Deps) gin.HandlerFunc {
 			"expires_at": key.ExpiresAt,
 		}})
 	}
+}
+
+// parseTimeFlexible 兼容多种时间输入格式（RFC3339 / 空格分隔 / 纯日期）。
+func parseTimeFlexible(s string) (time.Time, error) {
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04",
+		"2006-01-02",
+	}
+	for _, f := range formats {
+		if t, err := time.ParseInLocation(f, s, time.Local); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time format: %s", s)
 }
 
 // SetKeyStatus 启用/禁用 Key。

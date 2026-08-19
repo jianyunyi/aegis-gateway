@@ -109,7 +109,7 @@ export default function KeysPage() {
       rps_limit: values.rps_limit ?? 0,
       burst: values.burst ?? 0,
       quota_tokens: values.quota_tokens ?? 0,
-      expires_at: values.expires_at ? values.expires_at.format('YYYY-MM-DD HH:mm:ss') : null,
+      expires_at: values.expires_at ? values.expires_at.format('YYYY-MM-DDTHH:mm:ss') : null,
     };
 
     setSubmitting(true);
