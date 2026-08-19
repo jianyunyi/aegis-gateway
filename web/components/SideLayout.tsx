@@ -64,37 +64,31 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
   }
 
   return (
-    <Layout style={{ minHeight: '100vh', background: token.colorBgLayout }}>
+    <Layout className="aegis-page-shell" style={{ minHeight: '100vh', background: token.colorBgLayout }}>
       <Sider
         theme="dark"
         breakpoint="lg"
         collapsedWidth={64}
-        style={{ background: token.colorPrimaryActive }}
+        style={{ background: '#20242a' }}
       >
         <div
           className="aegis-brand"
           style={{
             display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-start',
+            alignItems: 'center',
             justifyContent: 'center',
-            padding: `0 ${token.paddingLG}px`,
-            background: token.colorPrimaryActive,
+            gap: 12,
+            padding: `0 ${token.padding}px`,
+            background: '#20242a',
           }}
         >
-          <Typography.Text strong style={{ color: token.colorWhite, fontSize: 18, letterSpacing: 1 }}>
-            AEGIS
-          </Typography.Text>
-          <Typography.Text
-            style={{
-              color: token.colorWhite,
-              fontSize: token.fontSizeSM,
-              letterSpacing: 1.5,
-              opacity: 0.68,
-            }}
-          >
-            AI GATEWAY
-          </Typography.Text>
+          <div className="aegis-brand-mark">A</div>
+          <div className="aegis-brand-copy">
+            <Typography.Text strong className="aegis-brand-title">
+              AEGIS
+            </Typography.Text>
+            <Typography.Text className="aegis-brand-subtitle">AI GATEWAY</Typography.Text>
+          </div>
         </div>
         <Menu
           className="aegis-menu"
@@ -109,13 +103,14 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
         <Header
           className="aegis-header"
           style={{
-            background: token.colorBgContainer,
+            background: token.colorBgLayout,
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'flex-end',
-            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            justifyContent: 'space-between',
+            borderBottom: `1px solid ${token.colorBorder}`,
           }}
         >
+          <Typography.Text className="aegis-header-context">Gateway Control</Typography.Text>
           <Space size="middle">
             <Typography.Text type="secondary">AEGIS 管理后台</Typography.Text>
             <Button type="text" icon={<LogoutOutlined />} onClick={handleLogout}>
@@ -137,26 +132,166 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
       </Layout>
       <style jsx global>{`
         .aegis-brand {
-          height: 72px;
+          height: 84px;
+          border-bottom: 1px solid rgb(255 247 236 / 12%);
+        }
+
+        .aegis-brand-mark {
+          width: 42px;
+          height: 42px;
+          display: grid;
+          flex: 0 0 42px;
+          place-items: center;
+          border-radius: 10px;
+          background: #ff6b4a;
+          color: #20242a;
+          font-size: 19px;
+          font-weight: 900;
+          line-height: 1;
+        }
+
+        .aegis-brand-copy {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .aegis-brand-title.ant-typography {
+          color: #fff7ec;
+          font-size: 19px;
+          letter-spacing: 0.08em;
+          line-height: 1.15;
+        }
+
+        .aegis-brand-subtitle.ant-typography {
+          margin-top: 3px;
+          color: rgb(255 247 236 / 58%);
+          font-size: 11px;
+          letter-spacing: 0.18em;
+          line-height: 1.2;
+        }
+
+        .ant-layout-sider-collapsed .aegis-brand-copy {
+          display: none;
         }
 
         .aegis-menu.ant-menu-dark {
-          background: ${token.colorPrimaryActive};
+          padding: 12px 10px;
+          background: #20242a;
+          border-inline-end: 0;
+        }
+
+        .aegis-menu.ant-menu-dark .ant-menu-item {
+          height: 38px;
+          margin: 4px 0;
+          border-radius: 9px;
+          color: rgb(255 247 236 / 72%);
+        }
+
+        .aegis-menu.ant-menu-dark .ant-menu-item:hover {
+          color: #fff7ec;
+          background: rgb(255 107 74 / 14%);
         }
 
         .aegis-menu.ant-menu-dark .ant-menu-item-selected {
-          background: ${token.colorPrimary};
-          color: ${token.colorWhite};
-          box-shadow: inset 3px 0 0 ${token.colorWhite};
+          background: #ff6b4a;
+          color: #20242a;
+          font-weight: 760;
+          box-shadow: none;
         }
 
         .aegis-menu.ant-menu-dark .ant-menu-item-selected .ant-menu-item-icon,
         .aegis-menu.ant-menu-dark .ant-menu-item-selected a {
-          color: ${token.colorWhite};
+          color: #20242a;
         }
 
         .aegis-header {
-          padding: 0 ${token.paddingLG}px;
+          height: 64px;
+          padding: 0 28px;
+        }
+
+        .aegis-header-context.ant-typography {
+          color: #84796c;
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+
+        .aegis-content {
+          background:
+            linear-gradient(180deg, rgb(255 250 241 / 38%), rgb(243 239 230 / 0%) 220px),
+            ${token.colorBgLayout};
+        }
+
+        .aegis-loading-panel {
+          padding: 80px;
+          text-align: center;
+        }
+
+        .aegis-mono,
+        .aegis-mono.ant-typography {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .aegis-surface-card.ant-card,
+        .aegis-table-card.ant-card,
+        .aegis-metric-card.ant-card {
+          border-color: #ded5c7;
+          background: #fffaf1;
+          box-shadow: 0 14px 36px rgb(34 31 26 / 6%);
+        }
+
+        .aegis-table-card.ant-card > .ant-card-head {
+          min-height: 58px;
+          border-bottom-color: #e4dbcf;
+          background: #fffaf1;
+        }
+
+        .aegis-table-card .ant-card-head-title {
+          font-size: 16px;
+          font-weight: 820;
+        }
+
+        .aegis-table-card .ant-table {
+          background: #fffaf1;
+        }
+
+        .aegis-table-card .ant-table-thead > tr > th {
+          font-size: 12px;
+          font-weight: 700;
+          color: #81756a;
+        }
+
+        .aegis-table-card .ant-table-tbody > tr > td {
+          border-bottom-color: #ebe3d8;
+        }
+
+        .aegis-metric-card.ant-card {
+          min-height: 118px;
+        }
+
+        .aegis-metric-card .ant-statistic-title {
+          color: #8b7f73;
+          font-size: 12px;
+        }
+
+        .aegis-metric-card .ant-statistic-content {
+          color: #24211d;
+          font-weight: 860;
+        }
+
+        .aegis-metric-card-feature.ant-card {
+          border-color: #20242a;
+          background: #20242a;
+        }
+
+        .aegis-metric-card-feature .ant-statistic-title {
+          color: rgb(255 247 236 / 62%);
+        }
+
+        .aegis-metric-card-feature .ant-statistic-content {
+          color: #fff7ec;
         }
 
         .aegis-page-header {
@@ -164,16 +299,37 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
           align-items: flex-end;
           justify-content: space-between;
           gap: 24px;
-          margin-bottom: 24px;
+          margin-bottom: 26px;
         }
 
         .aegis-page-header .ant-typography {
           margin-bottom: 0;
         }
 
+        .aegis-page-header h1.ant-typography,
+        .aegis-page-header h2.ant-typography,
+        .aegis-page-header h3.ant-typography,
+        .aegis-page-header h4.ant-typography {
+          margin-top: 4px;
+          font-size: 32px;
+          line-height: 1.08;
+          font-weight: 850;
+          letter-spacing: 0;
+        }
+
+        .aegis-page-header-kicker.ant-typography {
+          display: block;
+          color: #8b7f73;
+          font-size: 12px;
+          font-weight: 760;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+
         .aegis-page-header-description {
           margin: 6px 0 0 !important;
-          color: ${token.colorTextSecondary};
+          color: #6d6257;
+          line-height: 1.55;
         }
 
         .aegis-toolbar {
@@ -184,7 +340,36 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
           flex-wrap: wrap;
         }
 
+        .aegis-toolbar + .ant-table-wrapper {
+          margin-top: 4px;
+        }
+
+        .ant-btn-primary {
+          box-shadow: none;
+        }
+
+        .ant-typography code {
+          border-color: #e2d7ca;
+          background: #f7f1e8;
+          color: #20242a;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .ant-tag {
+          font-weight: 650;
+        }
+
+        /* 数据表格数字等宽对齐（视觉密度与可读性） */
+        .ant-table-tbody > tr > td,
+        .ant-statistic-content {
+          font-variant-numeric: tabular-nums;
+        }
+
         @media (max-width: 575px) {
+          .aegis-brand-copy {
+            display: none;
+          }
+
           .aegis-page-header {
             align-items: flex-start;
             flex-direction: column;
@@ -193,7 +378,11 @@ export default function SideLayout({ children }: { children: React.ReactNode }) 
           }
 
           .aegis-header {
-            padding: 0 ${token.padding}px;
+            padding: 0 16px;
+          }
+
+          .aegis-header-context.ant-typography {
+            display: none;
           }
 
           .aegis-content {

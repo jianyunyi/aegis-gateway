@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from '../.cache/screenshot/node_modules/playwright/index.mjs';
 
 const BASE = process.env.AEGIS_URL || 'http://localhost:3000';
+const USER = process.env.AEGIS_USER || 'admin';
+const PASS = process.env.AEGIS_PASSWORD || 'admin123';
 // fileURLToPath 会正确解码 %20 等转义（pathname 不会）
 const OUT = fileURLToPath(new URL('../docs/images/', import.meta.url));
 
@@ -33,8 +35,8 @@ await page.waitForTimeout(800);
 await shot('login');
 
 // 2. 登录 → 仪表盘（AntD Form id 格式：{formName}_{fieldName}）
-await page.fill('#login_username', 'admin');
-await page.fill('#login_password', 'admin123');
+await page.fill('#login_username', USER);
+await page.fill('#login_password', PASS);
 await page.getByRole('button', { name: '登 录' }).click();
 await page.waitForURL('**/dashboard');
 await page.waitForTimeout(2000);

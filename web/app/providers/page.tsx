@@ -133,6 +133,7 @@ export default function ProvidersPage() {
     <SideLayout>
       <div className="aegis-page-header">
         <div>
+          <Typography.Text className="aegis-page-header-kicker">Provider Routing</Typography.Text>
           <Typography.Title level={4}>提供商管理</Typography.Title>
           <Typography.Paragraph className="aegis-page-header-description">
             配置上游模型服务与路由优先级
@@ -141,7 +142,7 @@ export default function ProvidersPage() {
       </div>
 
       {loading && (
-        <div style={{ textAlign: 'center', padding: 80 }}>
+        <div className="aegis-loading-panel">
           <Spin size="large" tip="加载中..." />
         </div>
       )}
@@ -149,7 +150,7 @@ export default function ProvidersPage() {
       {!loading && error && <ErrorState description={error} />}
 
       {!loading && !error && (
-        <Card title="提供商列表">
+        <Card className="aegis-table-card" title="提供商列表">
           <div className="aegis-toolbar" style={{ marginBottom: 16 }}>
             <Typography.Text type="secondary">共 {list.length} 个上游服务</Typography.Text>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleOpen}>

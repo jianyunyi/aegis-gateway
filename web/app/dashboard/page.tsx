@@ -7,7 +7,7 @@
  * 接口未实现（501）或失败时展示 ErrorState，不崩溃。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Card, Col, Row, Spin, Statistic, Typography } from 'antd';
+import { Card, Col, Row, Skeleton, Statistic, Typography } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import type { EChartsOption } from 'echarts';
 import SideLayout from '@/components/SideLayout';
@@ -48,18 +48,64 @@ export default function DashboardPage() {
     void loadData();
   }, [loadData]);
 
+  // 主题色板（与 AntdProvider 一致，遵守"单页锁色"）
+  const C = {
+    ink: '#20242a',
+    accent: '#ff6b4a',
+    textSecondary: '#6d6257',
+    textFaint: '#8b7f73',
+    grid: '#e8dfd2',
+    axis: '#ded5c7',
+    surface: '#fffaf1',
+    surfaceAlt: '#f7f1e8',
+  };
+
   const chartOption: EChartsOption = {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['请求量', '成本(元)'] },
+    color: [C.ink, C.accent], // 主数据线近黑、成本线 accent，与全站一致
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: C.surface,
+      borderColor: C.axis,
+      borderWidth: 1,
+      textStyle: { color: C.ink, fontSize: 12 },
+      padding: [8, 12],
+      valueFormatter: (v) =>
+        typeof v === 'number' ? v.toLocaleString('zh-CN', { maximumFractionDigits: 6 }) : String(v),
+    },
+    legend: {
+      data: ['请求量', '成本(元)'],
+      textStyle: { color: C.textSecondary },
+      itemWidth: 14,
+      itemHeight: 3,
+    },
     grid: { left: 56, right: 56, top: 48, bottom: 32 },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: trends.map((t) => t.date),
+      axisLine: { lineStyle: { color: C.axis } },
+      axisLabel: { color: C.textFaint },
+      axisTick: { show: false },
     },
     yAxis: [
-      { type: 'value', name: '请求量', minInterval: 1 },
-      { type: 'value', name: '成本(元)', minInterval: 0.01 },
+      {
+        type: 'value',
+        name: '请求量',
+        minInterval: 1,
+        nameTextStyle: { color: C.textFaint },
+        axisLine: { show: false },
+        axisLabel: { color: C.textFaint },
+        splitLine: { lineStyle: { color: C.grid } },
+      },
+      {
+        type: 'value',
+        name: '成本(元)',
+        minInterval: 0.01,
+        nameTextStyle: { color: C.textFaint },
+        axisLine: { show: false },
+        axisLabel: { color: C.textFaint },
+        splitLine: { show: false },
+      },
     ],
     series: [
       {
@@ -67,6 +113,17 @@ export default function DashboardPage() {
         type: 'line',
         smooth: true,
         showSymbol: false,
+        lineStyle: { width: 2 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(32, 36, 42, 0.08)' },
+              { offset: 1, color: 'rgba(32, 36, 42, 0)' },
+            ],
+          },
+        },
         data: trends.map((t) => t.requests),
       },
       {
@@ -74,6 +131,7 @@ export default function DashboardPage() {
         type: 'line',
         smooth: true,
         showSymbol: false,
+        lineStyle: { width: 2 },
         yAxisIndex: 1,
         data: trends.map((t) => t.cost),
       },
@@ -84,6 +142,7 @@ export default function DashboardPage() {
     <SideLayout>
       <div className="aegis-page-header">
         <div>
+          <Typography.Text className="aegis-page-header-kicker">Gateway Control</Typography.Text>
           <Typography.Title level={4}>仪表盘</Typography.Title>
           <Typography.Paragraph className="aegis-page-header-description">
             监控今日调用、成本与模型稳定性
@@ -92,9 +151,21 @@ export default function DashboardPage() {
       </div>
 
       {loading && (
-        <div style={{ textAlign: 'center', padding: 80 }}>
-          <Spin size="large" tip="加载中..." />
-        </div>
+        // 骨架屏：形状匹配最终布局（4 张指标卡 + 趋势图），优于通用 spinner
+        <>
+          <Row gutter={[16, 16]}>
+            {[0, 1, 2, 3].map((i) => (
+              <Col xs={24} sm={12} lg={6} key={i}>
+                <Card className="aegis-metric-card">
+                  <Skeleton active title={{ width: 80 }} paragraph={{ rows: 1, width: 120 }} />
+                </Card>
+              </Col>
+            ))}
+          </Row>
+          <Card className="aegis-table-card" style={{ marginTop: 16 }}>
+            <Skeleton active paragraph={{ rows: 6 }} />
+          </Card>
+        </>
       )}
 
       {!loading && error && <ErrorState description={error} />}
@@ -103,38 +174,49 @@ export default function DashboardPage() {
         <>
           <Row gutter={[16, 16]}>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
-                <Statistic title="今日请求量" value={overview?.today_requests ?? 0} />
+              <Card className="aegis-metric-card aegis-metric-card-feature">
+                <Statistic
+                  title="今日请求量"
+                  value={overview?.today_requests ?? 0}
+                  valueStyle={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                />
               </Card>
             </Col>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
+              <Card className="aegis-metric-card">
                 <Statistic
                   title="今日成本（元）"
                   value={overview?.today_cost ?? 0}
                   precision={4}
                   prefix="¥"
+                  valueStyle={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
                 />
               </Card>
             </Col>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
-                <Statistic title="今日 Token" value={overview?.today_tokens ?? 0} />
+              <Card className="aegis-metric-card">
+                <Statistic
+                  title="今日 Token"
+                  value={overview?.today_tokens ?? 0}
+                  valueStyle={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
+                />
               </Card>
             </Col>
             <Col xs={24} sm={12} lg={6}>
-              <Card>
+              <Card className="aegis-metric-card">
                 <Statistic
                   title="成功率"
                   value={normalizeSuccessRate(overview?.success_rate)}
                   precision={2}
                   suffix="%"
+                  valueStyle={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}
                 />
               </Card>
             </Col>
           </Row>
 
           <Card
+            className="aegis-table-card"
             title="近 7 日趋势"
             style={{ marginTop: 16 }}
             extra={

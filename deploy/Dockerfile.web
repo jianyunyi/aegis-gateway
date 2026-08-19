@@ -13,8 +13,13 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/ .
 ENV NEXT_TELEMETRY_DISABLED=1
-# 浏览器直连网关 API（公网部署：指向 Cloudflare 隧道网关域名；本地开发改回 localhost:8081）
-ENV NEXT_PUBLIC_API_BASE=https://aegis-api.0001.indevs.in/api/v1/admin
+# API 基地址与 /api 重写目标均由 docker-compose 通过构建参数注入：
+# - 本地 Docker：浏览器走同源 /api，Next 重写到网关服务名（aegis-gateway:8080）
+# - 公网部署：改为真实网关域名（如 Cloudflare 隧道），并把 NEXT_PUBLIC_API_PROXY 设为网关地址
+ARG NEXT_PUBLIC_API_BASE=/api/v1/admin
+ARG NEXT_PUBLIC_API_PROXY=http://aegis-gateway:8080/api/:path*
+ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_PROXY=$NEXT_PUBLIC_API_PROXY
 RUN npm run build
 
 FROM node:20-alpine AS runner

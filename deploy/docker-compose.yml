@@ -65,9 +65,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.web
+      args:
+        # 本地 Docker：浏览器走同源 /api，由 Next 重写到网关（aegis-gateway:8080）
+        NEXT_PUBLIC_API_BASE: /api/v1/admin
+        NEXT_PUBLIC_API_PROXY: "http://aegis-gateway:8080/api/:path*"
     container_name: aegis-web
-    environment:
-      NEXT_PUBLIC_API_BASE: /api/v1/admin
     ports:
       - "3000:3000"
     depends_on:
