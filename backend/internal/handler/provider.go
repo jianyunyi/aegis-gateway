@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
+
+	"aegis-gateway/internal/service"
 )
 
 // ListProviders 查询全部提供商。
@@ -45,5 +49,25 @@ func CreateProvider(d *Deps) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": p})
+	}
+}
+
+// DeleteProvider 删除提供商（其下存在模型时拒绝，防止误删）。
+func DeleteProvider(d *Deps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "id 无效", "data": nil})
+			return
+		}
+		if err := d.Providers.Delete(id); err != nil {
+			if errors.Is(err, service.ErrProviderHasModels) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "该提供商下仍有模型，请先删除其模型", "data": nil})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "删除失败", "data": nil})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": nil})
 	}
 }

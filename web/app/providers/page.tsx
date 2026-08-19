@@ -15,6 +15,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Switch,
   Table,
   Tag,
@@ -26,7 +27,7 @@ import type { ColumnsType } from 'antd/es/table';
 import SideLayout from '@/components/SideLayout';
 import ErrorState from '@/components/ErrorState';
 import TableSkeleton from '@/components/TableSkeleton';
-import { get, post } from '@/lib/api';
+import { get, post, del } from '@/lib/api';
 import type { PageResult, Provider, ProviderCreatePayload } from '@/lib/types';
 
 /** 新建提供商的 Modal 表单值（enabled 为 Switch 的布尔值，提交时转 1/0） */
@@ -44,25 +45,6 @@ function normalizeProviders(data: PageResult<Provider> | Provider[] | null | und
   if (Array.isArray(data)) return data;
   return data.list ?? [];
 }
-
-const columns: ColumnsType<Provider> = [
-  { title: '名称', dataIndex: 'name', key: 'name' },
-  {
-    title: 'Base URL',
-    dataIndex: 'base_url',
-    key: 'base_url',
-    ellipsis: true,
-    render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
-  },
-  {
-    title: '状态',
-    dataIndex: 'enabled',
-    key: 'enabled',
-    render: (value: number) =>
-      value === 1 ? <Tag color="success">启用</Tag> : <Tag>禁用</Tag>,
-  },
-  { title: '优先级（小者优先）', dataIndex: 'priority', key: 'priority' },
-];
 
 export default function ProvidersPage() {
   const [list, setList] = useState<Provider[]>([]);
@@ -128,6 +110,55 @@ export default function ProvidersPage() {
       setSubmitting(false);
     }
   };
+
+  // 删除提供商（有模型的提供商后端会拒绝并提示）
+  const handleDelete = async (id: number) => {
+    try {
+      await del(`/providers/${id}`);
+      message.success('提供商已删除');
+      void loadData();
+    } catch {
+      // 失败：错误提示已由响应拦截器统一处理
+    }
+  };
+
+  const columns: ColumnsType<Provider> = [
+    { title: '名称', dataIndex: 'name', key: 'name' },
+    {
+      title: 'Base URL',
+      dataIndex: 'base_url',
+      key: 'base_url',
+      ellipsis: true,
+      render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      render: (value: number) =>
+        value === 1 ? <Tag color="success">启用</Tag> : <Tag>禁用</Tag>,
+    },
+    { title: '优先级（小者优先）', dataIndex: 'priority', key: 'priority' },
+    {
+      title: '操作',
+      key: 'action',
+      width: 90,
+      render: (_, r) => (
+        <Popconfirm
+          title="删除该提供商？"
+          description="删除后不可恢复"
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => void handleDelete(r.id)}
+        >
+          <Button size="small" danger type="text">
+            删除
+          </Button>
+        </Popconfirm>
+      ),
+    },
+  ];
 
   return (
     <SideLayout>

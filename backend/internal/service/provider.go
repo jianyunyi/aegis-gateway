@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+
 	"aegis-gateway/internal/model"
 	"aegis-gateway/internal/repository"
 	"aegis-gateway/internal/util"
@@ -58,4 +60,19 @@ func (s *ProviderService) DecryptKey(p *model.Provider) (string, error) {
 		return "", nil
 	}
 	return util.DecryptSecret(s.secret, p.APIKeyEnc)
+}
+
+// ErrProviderHasModels 提供商下仍有模型时拒绝删除（防误删）。
+var ErrProviderHasModels = errors.New("provider has models")
+
+// Delete 删除提供商：若其下存在模型则拒绝（安全策略：先删模型再删提供商）。
+func (s *ProviderService) Delete(id uint64) error {
+	var count int64
+	if err := s.repo.DB.Model(&model.Model{}).Where("provider_id = ?", id).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrProviderHasModels
+	}
+	return s.repo.DB.Delete(&model.Provider{}, id).Error
 }

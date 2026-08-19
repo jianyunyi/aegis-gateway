@@ -70,6 +70,7 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 			authed.PUT("/keys/:id", handler.SetKeyStatus(d))
 			authed.GET("/providers", handler.ListProviders(d))
 			authed.POST("/providers", handler.CreateProvider(d))
+			authed.DELETE("/providers/:id", handler.DeleteProvider(d))
 			authed.GET("/models", handler.ListModels(d))
 			authed.POST("/models", handler.CreateModel(d))
 
