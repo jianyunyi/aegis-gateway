@@ -37,6 +37,10 @@ func CreateProvider(d *Deps) gin.HandlerFunc {
 		}
 		p, err := d.Providers.Create(req.Name, req.BaseURL, req.APIKey, req.Enabled, req.Priority)
 		if err != nil {
+			if isDuplicate(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "提供商名称已存在", "data": nil})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "创建失败", "data": nil})
 			return
 		}

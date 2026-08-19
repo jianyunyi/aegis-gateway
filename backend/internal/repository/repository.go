@@ -23,7 +23,8 @@ type Repository struct {
 // New 初始化 MySQL 与 Redis 连接并做连通性检查。
 func New(cfg *config.Config) (*Repository, error) {
 	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Warn),
+		Logger:         gormlogger.Default.LogMode(gormlogger.Warn),
+		TranslateError: true, // 将 MySQL 1062 等错误翻译为 gorm.ErrDuplicatedKey（用于友好报错）
 	})
 	if err != nil {
 		return nil, err

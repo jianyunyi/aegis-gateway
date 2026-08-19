@@ -32,6 +32,10 @@ func CreateModel(d *Deps) gin.HandlerFunc {
 			m.Tier = "normal"
 		}
 		if err := d.Models.Create(&m); err != nil {
+			if isDuplicate(err) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "模型名称已存在", "data": nil})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "创建失败", "data": nil})
 			return
 		}
