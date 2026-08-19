@@ -23,8 +23,8 @@ import {
   Modal,
   Row,
   Select,
+  Skeleton,
   Space,
-  Spin,
   Statistic,
   Table,
   Tabs,
@@ -42,6 +42,7 @@ import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import SideLayout from '@/components/SideLayout';
 import ErrorState from '@/components/ErrorState';
+import TableSkeleton from '@/components/TableSkeleton';
 import { get, post } from '@/lib/api';
 import type {
   EvalDataset,
@@ -411,11 +412,7 @@ export default function EvalsPage() {
         </div>
       </div>
 
-      {loadingDs && (
-        <div style={{ textAlign: 'center', padding: 80 }}>
-          <Spin size="large" />
-        </div>
-      )}
+      {loadingDs && <TableSkeleton rows={6} />}
 
       {!loadingDs && error && <ErrorState description={error} onRetry={() => void loadDatasets()} />}
 
@@ -479,8 +476,10 @@ export default function EvalsPage() {
                     {
                       key: 'samples',
                       label: `样本（${samples.length}）`,
-                      children: (
-                        <Spin spinning={loadingDetail}>
+                      children: loadingDetail ? (
+                        <TableSkeleton rows={5} toolbar={false} />
+                      ) : (
+                        <>
                           <Space style={{ marginBottom: 12 }} wrap>
                             <Button
                               icon={<ReloadOutlined />}
@@ -501,14 +500,16 @@ export default function EvalsPage() {
                             pagination={{ pageSize: 8, showTotal: (t) => `共 ${t} 条` }}
                             locale={{ emptyText: '暂无样本，可从真实日志采样或手动添加' }}
                           />
-                        </Spin>
+                        </>
                       ),
                     },
                     {
                       key: 'runs',
                       label: `评测运行（${runs.length}）`,
-                      children: (
-                        <Spin spinning={loadingDetail}>
+                      children: loadingDetail ? (
+                        <TableSkeleton rows={4} toolbar={false} />
+                      ) : (
+                        <>
                           <Space style={{ marginBottom: 12 }}>
                             <Button
                               type="primary"
@@ -530,7 +531,7 @@ export default function EvalsPage() {
                             locale={{ emptyText: '暂无评测运行' }}
                             scroll={{ x: 1000 }}
                           />
-                        </Spin>
+                        </>
                       ),
                     },
                   ]}
@@ -639,9 +640,7 @@ export default function EvalsPage() {
         onClose={() => setReportOpen(false)}
       >
         {reportLoading ? (
-          <div style={{ textAlign: 'center', padding: 60 }}>
-            <Spin />
-          </div>
+          <Skeleton active paragraph={{ rows: 8 }} />
         ) : reportRun && reportRun.status === 1 ? (
           <>
             <Row gutter={16} style={{ marginBottom: 16 }}>

@@ -20,7 +20,6 @@ import {
   Modal,
   Popconfirm,
   Space,
-  Spin,
   Table,
   Tag,
   Typography,
@@ -32,6 +31,7 @@ import type { Dayjs } from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import SideLayout from '@/components/SideLayout';
 import ErrorState from '@/components/ErrorState';
+import TableSkeleton from '@/components/TableSkeleton';
 import { get, post, put } from '@/lib/api';
 import type { ApiKey, ApiKeyCreatePayload, ApiKeyCreated, PageResult } from '@/lib/types';
 
@@ -216,11 +216,7 @@ export default function KeysPage() {
         />
       )}
 
-      {loading && (
-        <div className="aegis-loading-panel">
-          <Spin size="large" tip="加载中..." />
-        </div>
-      )}
+      {loading && <TableSkeleton rows={6} />}
 
       {!loading && error && <ErrorState description={error} />}
 

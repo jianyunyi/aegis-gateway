@@ -8,11 +8,12 @@
  * 接口未实现（501）或失败时展示 ErrorState，不崩溃；错误提示由响应拦截器统一 message.error。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Card, Input, Spin, Table, Tag, Typography } from 'antd';
+import { Card, Input, Table, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import SideLayout from '@/components/SideLayout';
 import ErrorState from '@/components/ErrorState';
+import TableSkeleton from '@/components/TableSkeleton';
 import { get } from '@/lib/api';
 import type { PageResult, UsageLog } from '@/lib/types';
 
@@ -104,11 +105,7 @@ export default function LogsPage() {
         </div>
       </div>
 
-      {loading && (
-        <div style={{ textAlign: 'center', padding: 80 }}>
-          <Spin size="large" tip="加载中..." />
-        </div>
-      )}
+      {loading && <TableSkeleton rows={6} />}
 
       {!loading && error && <ErrorState description={error} />}
 

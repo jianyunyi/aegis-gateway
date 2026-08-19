@@ -15,7 +15,6 @@ import {
   Input,
   InputNumber,
   Modal,
-  Spin,
   Switch,
   Table,
   Tag,
@@ -26,6 +25,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import SideLayout from '@/components/SideLayout';
 import ErrorState from '@/components/ErrorState';
+import TableSkeleton from '@/components/TableSkeleton';
 import { get, post } from '@/lib/api';
 import type { PageResult, Provider, ProviderCreatePayload } from '@/lib/types';
 
@@ -141,11 +141,7 @@ export default function ProvidersPage() {
         </div>
       </div>
 
-      {loading && (
-        <div className="aegis-loading-panel">
-          <Spin size="large" tip="加载中..." />
-        </div>
-      )}
+      {loading && <TableSkeleton rows={6} />}
 
       {!loading && error && <ErrorState description={error} />}
 
