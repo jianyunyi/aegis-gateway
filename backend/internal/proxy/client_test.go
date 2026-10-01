@@ -52,3 +52,22 @@ func TestParseUsageFromSSELine(t *testing.T) {
 		t.Fatal("无 usage 的 chunk 不应命中")
 	}
 }
+
+func TestHasContentDelta(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{": heartbeat", false},
+		{`data: {"choices":[{"delta":{"role":"assistant"}}]}`, false},
+		{`data: {"choices":[],"usage":{"total_tokens":30}}`, false},
+		{`data: {"choices":[{"delta":{"content":"hello"}}]}`, true},
+		{`data: {"choices":[{"delta":{"tool_calls":[{"index":0}]}}]}`, true},
+		{`data: {"choices":[{"delta":{"function_call":null}}]}`, false},
+		{"data: [DONE]", false},
+	} {
+		if got := HasContentDelta(tc.line); got != tc.want {
+			t.Fatalf("%s got %t want %t", tc.line, got, tc.want)
+		}
+	}
+}

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"aegis-gateway/internal/middleware"
 	"aegis-gateway/internal/model"
@@ -84,17 +86,36 @@ func costOf(m *model.Model, prompt, completion int) float64 {
 
 // persistUsage 落库调用日志 + Redis 配额计数 + MySQL used_tokens 更新。
 func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.UsageLog) {
-	if log.TotalTokens > 0 {
-		ctx := context.Background()
-		if key.QuotaTokens > 0 {
-			_ = repo.Redis.IncrBy(ctx, "quota:"+strconv.FormatUint(key.ID, 10), int64(log.TotalTokens)).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current model.ApiKey
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, key.ID).Error; err != nil {
+			return err
 		}
-		_ = repo.DB.Model(&model.ApiKey{}).Where("id = ?", key.ID).
-			UpdateColumn("used_tokens", key.UsedTokens+int64(log.TotalTokens)).Error
-	}
-	if err := repo.DB.Create(log).Error; err != nil {
+		if err := tx.Create(log).Error; err != nil {
+			return err
+		}
+		return tx.Model(&current).UpdateColumn("used_tokens", gorm.Expr("used_tokens + ?", log.TotalTokens)).Error
+	})
+	if err != nil {
 		slog.Error("write usage log failed", "request_id", log.RequestID, "error", err)
+		return
 	}
+	// Refresh from committed MySQL state while holding the same lock as reconciliation.
+	if key.QuotaTokens > 0 {
+		err = repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var current model.ApiKey
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, key.ID).Error; err != nil {
+				return err
+			}
+			return repo.Redis.Set(ctx, "quota:"+strconv.FormatUint(key.ID, 10), current.UsedTokens, 0).Err()
+		})
+		if err != nil {
+			slog.Error("quota projection failed", "request_id", log.RequestID, "error", err)
+		}
+	}
+
 }
 
 // ---- 代理端点 ----
@@ -295,13 +316,17 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 		complet int
 		status  int16
 		errCode string
+		done    bool
 		scanner = bufio.NewScanner(upstream)
 	)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if first {
+		if strings.TrimSpace(line) == "data: [DONE]" {
+			done = true
+		}
+		if first && proxy.HasContentDelta(line) {
 			ttft = int(time.Since(start).Milliseconds())
 			first = false
 		}
@@ -310,16 +335,25 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 		}
 		// 客户端提前断开（如用户取消）≠ 上游错误，需区分记录
 		if _, werr := c.Writer.WriteString(line); werr != nil {
-			status, errCode = 0, "client_disconnect"
+			status, errCode = 499, "client_disconnect"
 			break
 		}
-		_, _ = c.Writer.WriteString("\n")
+		if _, err := c.Writer.WriteString("\n"); err != nil {
+			status, errCode = 499, "client_disconnect"
+			break
+		}
 		flusher.Flush()
 	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
+	if c.Request.Context().Err() != nil {
+		status, errCode = 499, "client_disconnect"
+	} else if errCode == "" && scanner.Err() != nil && !errors.Is(scanner.Err(), io.EOF) {
 		status, errCode = http.StatusBadGateway, "upstream_stream_error"
 	}
 
+	if errCode == "" && !done {
+		status, errCode = http.StatusBadGateway, "upstream_stream_incomplete"
+	}
+	c.Set("result", errCode)
 	log := newUsageLog(apiKey, target, requestID, start)
 	log.PromptTokens = prompt
 	log.CompletionTokens = complet
