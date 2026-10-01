@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"aegis-gateway/internal/model"
 	"aegis-gateway/internal/repository"
@@ -29,7 +31,7 @@ func NewBillingService(repo *repository.Repository) *BillingService {
 func (s *BillingService) Daily(ctx context.Context, days int) ([]model.BillingDaily, error) {
 	var rows []model.BillingDaily
 	since := time.Now().AddDate(0, 0, -days)
-	err := s.repo.DB.Model(&model.UsageLog{}).
+	err := s.repo.DB.WithContext(ctx).Model(&model.UsageLog{}).
 		Select("DATE_FORMAT(created_at, '%Y-%m-%d') AS date, api_key_id, COUNT(*) AS request_count, COALESCE(SUM(prompt_tokens),0) AS prompt_tokens, COALESCE(SUM(completion_tokens),0) AS completion_tokens, COALESCE(SUM(total_tokens),0) AS total_tokens, COALESCE(SUM(cost),0) AS cost").
 		Where("created_at >= ?", since).
 		Group("DATE_FORMAT(created_at, '%Y-%m-%d'), api_key_id").
@@ -40,29 +42,41 @@ func (s *BillingService) Daily(ctx context.Context, days int) ([]model.BillingDa
 
 // Aggregate 将最近 days 天的聚合结果 upsert 进 billing_daily（预聚合归档表）。
 func (s *BillingService) Aggregate(ctx context.Context, days int) (int, error) {
+	var count int
+	err := s.repo.DB.WithContext(ctx).Connection(func(db *gorm.DB) error {
+		var acquired int
+		if err := db.Raw("SELECT GET_LOCK(?, 0)", "aegis:billing:aggregate").Scan(&acquired).Error; err != nil {
+			return err
+		}
+		if acquired != 1 {
+			return nil
+		}
+		defer func() {
+			// The caller may have cancelled; release on the same pinned session.
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			db.WithContext(releaseCtx).Exec("SELECT RELEASE_LOCK(?)", "aegis:billing:aggregate")
+		}()
+		local := NewBillingService(&repository.Repository{DB: db, Redis: s.repo.Redis})
+		var err error
+		count, err = local.aggregate(ctx, days)
+		return err
+	})
+	return count, err
+}
+
+func (s *BillingService) aggregate(ctx context.Context, days int) (int, error) {
 	rows, err := s.Daily(ctx, days)
 	if err != nil {
 		return 0, err
 	}
-	now := time.Now()
-	for _, r := range rows {
-		r.CreatedAt = now
-		var exist model.BillingDaily
-		err := s.repo.DB.Where("date = ? AND api_key_id = ?", r.Date, r.APIKeyID).First(&exist).Error
-		if err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return 0, err
-			}
-			if err := s.repo.DB.Create(&r).Error; err != nil {
-				return 0, err
-			}
-			continue
-		}
-		r.ID = exist.ID
-		if err := s.repo.DB.Save(&r).Error; err != nil {
+	for _, row := range rows {
+		row.CreatedAt = time.Now()
+		if err := s.repo.DB.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "date"}, {Name: "api_key_id"}}, DoUpdates: clause.AssignmentColumns([]string{"request_count", "prompt_tokens", "completion_tokens", "total_tokens", "cost"})}).Create(&row).Error; err != nil {
 			return 0, err
 		}
 	}
+
 	return len(rows), nil
 }
 
@@ -70,22 +84,34 @@ func (s *BillingService) Aggregate(ctx context.Context, days int) (int, error) {
 // 返回检查数/修正数。仅对设置了配额（quota_tokens>0）的 Key 生效。
 func (s *BillingService) ReconcileQuota(ctx context.Context) (checked, corrected int, err error) {
 	var keys []model.ApiKey
-	if err := s.repo.DB.Where("quota_tokens > 0").Find(&keys).Error; err != nil {
+	if err := s.repo.DB.WithContext(ctx).Where("quota_tokens > 0").Find(&keys).Error; err != nil {
 		return 0, 0, err
 	}
-	for _, k := range keys {
+	for _, key := range keys {
 		checked++
-		redisKey := "quota:" + strconv.FormatUint(k.ID, 10)
-		redisVal, _ := s.repo.Redis.Get(ctx, redisKey).Int64()
-		if redisVal != k.UsedTokens {
-			if err := s.repo.Redis.Set(ctx, redisKey, k.UsedTokens, 0).Err(); err != nil {
-				return checked, corrected, err
+		err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var k model.ApiKey
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&k, key.ID).Error; err != nil {
+				return err
 			}
-			corrected++
-			slog.Info("quota reconciled (mysql wins)",
-				"api_key_id", k.ID, "redis", redisVal, "mysql", k.UsedTokens)
+			redisKey := "quota:" + strconv.FormatUint(k.ID, 10)
+			val, err := s.repo.Redis.Get(ctx, redisKey).Int64()
+			if err != nil && !errors.Is(err, redis.Nil) {
+				return err
+			}
+			if val != k.UsedTokens || errors.Is(err, redis.Nil) {
+				if err := s.repo.Redis.Set(ctx, redisKey, k.UsedTokens, 0).Err(); err != nil {
+					return err
+				}
+				corrected++
+			}
+			return nil
+		})
+		if err != nil {
+			return checked, corrected, err
 		}
 	}
+
 	return checked, corrected, nil
 }
 
@@ -98,6 +124,8 @@ type ReconcileResult struct {
 
 // Reconcile 执行聚合 + 配额对账。
 func (s *BillingService) Reconcile(ctx context.Context, days int) (*ReconcileResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	agg, err := s.Aggregate(ctx, days)
 	if err != nil {
 		return nil, err

@@ -46,10 +46,11 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 
 	// 健康检查
 	r.GET("/healthz", handler.Health)
+	r.GET("/readyz", handler.Ready(d))
 
 	// 代理侧：OpenAI 兼容协议（Bearer ak_xxx）→ KeyAuth → RateLimit
 	pg := r.Group("/v1")
-	pg.Use(middleware.KeyAuth(repo), middleware.RateLimit(repo))
+	pg.Use(middleware.KeyAuth(repo), middleware.RateLimit(repo, cfg))
 	{
 		pg.POST("/chat/completions", handler.ChatCompletions(d))
 		pg.POST("/completions", handler.Completions(d))

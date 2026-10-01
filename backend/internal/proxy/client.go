@@ -133,3 +133,28 @@ func ParseContentFromBody(raw []byte) string {
 	}
 	return r.Choices[0].Message.Content
 }
+
+// HasContentDelta excludes heartbeats, role-only events and usage-only events from TTFT.
+func HasContentDelta(line string) bool {
+	if !strings.HasPrefix(line, "data:") {
+		return false
+	}
+	var event struct {
+		Choices []struct {
+			Delta struct {
+				Content      string            `json:"content"`
+				ToolCalls    []json.RawMessage `json:"tool_calls"`
+				FunctionCall json.RawMessage   `json:"function_call"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) != nil {
+		return false
+	}
+	for _, choice := range event.Choices {
+		if choice.Delta.Content != "" || len(choice.Delta.ToolCalls) > 0 || (len(choice.Delta.FunctionCall) > 0 && string(choice.Delta.FunctionCall) != "null") {
+			return true
+		}
+	}
+	return false
+}

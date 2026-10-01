@@ -3,12 +3,13 @@ package repository
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	gormlogger "gorm.io/gorm/logger"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 
 	"aegis-gateway/internal/config"
 	"aegis-gateway/internal/model"
@@ -16,8 +17,9 @@ import (
 
 // Repository 聚合数据访问入口。
 type Repository struct {
-	DB    *gorm.DB
-	Redis *redis.Client
+	Draining atomic.Bool
+	DB       *gorm.DB
+	Redis    *redis.Client
 }
 
 // New 初始化 MySQL 与 Redis 连接并做连通性检查。
@@ -38,9 +40,10 @@ func New(cfg *config.Config) (*Repository, error) {
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPass,
-		DB:       0,
+		Addr:                  cfg.RedisAddr,
+		Password:              cfg.RedisPass,
+		DB:                    0,
+		ContextTimeoutEnabled: true,
 	})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		return nil, err

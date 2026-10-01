@@ -2,12 +2,14 @@ package middleware
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"aegis-gateway/internal/config"
 	"aegis-gateway/internal/model"
 	"aegis-gateway/internal/repository"
 )
@@ -32,8 +34,8 @@ redis.call('SET', KEYS[2], now, 'PX', ttl)
 return 1`
 
 // RateLimit 按 API Key 做令牌桶限流（在 KeyAuth 之后执行）。
-// 决策：Redis 不可用时 fail-open（保证网关可用性），生产可切换 fail-closed。
-func RateLimit(repo *repository.Repository) gin.HandlerFunc {
+// Redis failures use the configured policy; default is fail-closed (503).
+func RateLimit(repo *repository.Repository, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key, ok := c.MustGet(CtxAPIKey).(*model.ApiKey)
 		if !ok {
@@ -45,13 +47,20 @@ func RateLimit(repo *repository.Repository) gin.HandlerFunc {
 			return
 		}
 
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(c.Request.Context(), cfg.RateLimitTimeout)
+		defer cancel()
 		id := strconv.FormatUint(key.ID, 10)
 		allow, err := repo.Redis.Eval(ctx, rlScript,
-			[]string{"rl:" + id + ":tokens", "rl:" + id + ":ts"},
+			[]string{"rl:{" + id + "}:tokens", "rl:{" + id + "}:ts"},
 			key.RPSLimit, key.Burst, time.Now().UnixMilli()).Int()
 		if err != nil {
-			c.Next() // fail-open
+			c.Set("result", "rate_limit_dependency_error")
+			slog.Error("rate_limit_dependency_error", "request_id", c.GetString(RequestIDKey), "fail_open", cfg.RateLimitFailOpen, "error", err)
+			if cfg.RateLimitFailOpen {
+				c.Next()
+				return
+			}
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": "rate limiter unavailable", "type": "rate_limit_unavailable"}})
 			return
 		}
 		if allow != 1 {

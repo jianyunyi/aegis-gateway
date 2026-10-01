@@ -7,7 +7,7 @@
 统一的企业大模型接入网关：**路由、限流、计费、观测、评测**一站式平台。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
 [![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org/)
 [![CI](https://github.com/jianyunyi/aegis-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/jianyunyi/aegis-gateway/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)](https://docs.docker.com/compose/)
@@ -32,6 +32,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 # 2. 健康检查
 curl http://localhost:8081/healthz
+curl http://localhost:8081/readyz  # LB readiness：检查 MySQL + Redis
 
 # 3. 打开管理后台（浏览器直连 8081 网关 API，CORS 已放行）
 open http://localhost:3000        # 默认账号 admin / admin123
