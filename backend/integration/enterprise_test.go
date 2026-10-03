@@ -147,6 +147,150 @@ func TestQuotaProjectionDoesNotRegress(t *testing.T) {
 	}
 }
 
+// Pause reconciliation Redis I/O, including the old implementation's GET,
+// without affecting the other instance's request or quota projection.
+type reconcileStallHook struct {
+	key     string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (h *reconcileStallHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h *reconcileStallHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+func (h *reconcileStallHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "get" || cmd.Name() == "watch" {
+			for _, arg := range cmd.Args() {
+				if arg == h.key {
+					h.once.Do(func() { close(h.entered) })
+					select {
+					case <-h.release:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+			}
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func TestReconcileRedisStallDoesNotBlockUsage(t *testing.T) {
+	f := setup(t, true)
+	h := &reconcileStallHook{key: fmt.Sprintf("quota:%d", f.key.ID), entered: make(chan struct{}), release: make(chan struct{})}
+	f.repos[0].Redis.AddHook(h)
+	var release sync.Once
+	defer release.Do(func() { close(h.release) })
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _, err := service.NewBillingService(f.repos[0]).ReconcileQuota(ctx)
+		done <- err
+	}()
+	select {
+	case <-h.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("reconciliation did not reach Redis")
+	}
+	request := make(chan error, 1)
+	go func() {
+		resp, err := f.chat(1, "reconcile-stall", false)
+		if err == nil {
+			_, err = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != 200 {
+				err = fmt.Errorf("status %d", resp.StatusCode)
+			}
+		}
+		request <- err
+	}()
+	select {
+	case err := <-request:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(750 * time.Millisecond):
+		t.Fatal("stalled reconciliation blocked request persistence")
+	}
+	var key model.ApiKey
+	var count int64
+	if err := f.repos[1].DB.First(&key, f.key.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repos[1].DB.Model(&model.UsageLog{}).Where("api_key_id = ?", key.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if key.UsedTokens != 30 || count != 1 {
+		t.Fatalf("tokens=%d logs=%d", key.UsedTokens, count)
+	}
+	release.Do(func() { close(h.release) })
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Run a concurrent successful request after the reconciler has read MySQL but
+// before Redis EXEC. A corrupt high counter makes the projection a no-op unless
+// it also invalidates WATCH; reconciliation must retry using the new DB total.
+type reconcileRaceHook struct {
+	once   sync.Once
+	update func() error
+}
+
+func (h *reconcileRaceHook) DialHook(next redis.DialHook) redis.DialHook          { return next }
+func (h *reconcileRaceHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+func (h *reconcileRaceHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		var err error
+		h.once.Do(func() { err = h.update() })
+		if err != nil {
+			return err
+		}
+		return next(ctx, cmds)
+	}
+}
+
+func TestReconcileRetriesConcurrentUsage(t *testing.T) {
+	f := setup(t, false)
+	ctx := context.Background()
+	redisKey := fmt.Sprintf("quota:%d", f.key.ID)
+	if err := f.repos[0].Redis.Set(ctx, redisKey, 1000, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	// Restrict the test callback to this key: previous fixtures may remain in
+	// the disposable DB, so reconcile only after their counters are repaired.
+	if _, _, err := service.NewBillingService(f.repos[0]).ReconcileQuota(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repos[0].Redis.Set(ctx, redisKey, 1000, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	h := &reconcileRaceHook{update: func() error {
+		resp, err := f.chat(1, "reconcile-race", false)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		_, err = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("status %d", resp.StatusCode)
+		}
+		return err
+	}}
+	f.repos[0].Redis.AddHook(h)
+	if _, _, err := service.NewBillingService(f.repos[0]).ReconcileQuota(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.repos[1].Redis.Get(ctx, redisKey).Int64()
+	if err != nil || got != 30 {
+		t.Fatalf("projection=%d error=%v", got, err)
+	}
+}
+
 func newGate(t *testing.T, target string) *faultGate {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")

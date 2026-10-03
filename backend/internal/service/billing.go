@@ -89,30 +89,53 @@ func (s *BillingService) ReconcileQuota(ctx context.Context) (checked, corrected
 	}
 	for _, key := range keys {
 		checked++
-		err := s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			var k model.ApiKey
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&k, key.ID).Error; err != nil {
-				return err
-			}
-			redisKey := "quota:" + strconv.FormatUint(k.ID, 10)
-			val, err := s.repo.Redis.Get(ctx, redisKey).Int64()
-			if err != nil && !errors.Is(err, redis.Nil) {
-				return err
-			}
-			if val != k.UsedTokens || errors.Is(err, redis.Nil) {
-				if err := s.repo.Redis.Set(ctx, redisKey, k.UsedTokens, 0).Err(); err != nil {
-					return err
-				}
-				corrected++
-			}
-			return nil
-		})
+		changed, err := s.reconcileQuotaKey(ctx, key.ID)
 		if err != nil {
 			return checked, corrected, err
+		}
+		if changed {
+			corrected++
 		}
 	}
 
 	return checked, corrected, nil
+}
+
+// WATCH fences concurrent projections and reconcilers without holding a MySQL
+// row lock across Redis I/O. Read Redis before MySQL, then compare-and-set.
+func (s *BillingService) reconcileQuotaKey(parent context.Context, id uint64) (bool, error) {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	redisKey := "quota:" + strconv.FormatUint(id, 10)
+	for {
+		changed := false
+		err := s.repo.Redis.Watch(ctx, func(tx *redis.Tx) error {
+			val, err := tx.Get(ctx, redisKey).Int64()
+			if err != nil && !errors.Is(err, redis.Nil) {
+				return err
+			}
+			missing := errors.Is(err, redis.Nil)
+			var current model.ApiKey
+			if err := s.repo.DB.WithContext(ctx).First(&current, id).Error; err != nil {
+				return err
+			}
+			if !missing && val == current.UsedTokens {
+				return nil
+			}
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, redisKey, current.UsedTokens, 0)
+				return nil
+			})
+			changed = err == nil
+			return err
+		}, redisKey)
+		if !errors.Is(err, redis.TxFailedErr) {
+			return changed, err
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
 }
 
 // Reconcile 一次完整对账：聚合账单 + 配额修正，返回摘要。供定时任务与手动触发共用。
