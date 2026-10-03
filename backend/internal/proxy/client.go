@@ -158,3 +158,9 @@ func HasContentDelta(line string) bool {
 	}
 	return false
 }
+
+// IsSSEDone accepts either serialization of the SSE data field.
+func IsSSEDone(line string) bool {
+	line = strings.TrimSpace(line)
+	return strings.HasPrefix(line, "data:") && strings.TrimSpace(strings.TrimPrefix(line, "data:")) == "[DONE]"
+}

@@ -88,6 +88,7 @@ func costOf(m *model.Model, prompt, completion int) float64 {
 func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.UsageLog) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	var committedTokens int64
 	err := repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current model.ApiKey
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, key.ID).Error; err != nil {
@@ -96,22 +97,22 @@ func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.Usa
 		if err := tx.Create(log).Error; err != nil {
 			return err
 		}
-		return tx.Model(&current).UpdateColumn("used_tokens", gorm.Expr("used_tokens + ?", log.TotalTokens)).Error
+		if err := tx.Model(&current).UpdateColumn("used_tokens", gorm.Expr("used_tokens + ?", log.TotalTokens)).Error; err != nil {
+			return err
+		}
+		committedTokens = current.UsedTokens + int64(log.TotalTokens)
+		return nil
 	})
 	if err != nil {
 		slog.Error("write usage log failed", "request_id", log.RequestID, "error", err)
 		return
 	}
-	// Refresh from committed MySQL state while holding the same lock as reconciliation.
+	// Best-effort projection runs after COMMIT, without holding an API-key lock.
+	// A separate deadline keeps Redis failure independent of ledger persistence.
 	if key.QuotaTokens > 0 {
-		err = repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			var current model.ApiKey
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, key.ID).Error; err != nil {
-				return err
-			}
-			return repo.Redis.Set(ctx, "quota:"+strconv.FormatUint(key.ID, 10), current.UsedTokens, 0).Err()
-		})
-		if err != nil {
+		projectionCtx, projectionCancel := context.WithTimeout(context.Background(), time.Second)
+		defer projectionCancel()
+		if err := repo.ProjectQuota(projectionCtx, key.ID, committedTokens); err != nil {
 			slog.Error("quota projection failed", "request_id", log.RequestID, "error", err)
 		}
 	}
@@ -323,7 +324,7 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.TrimSpace(line) == "data: [DONE]" {
+		if proxy.IsSSEDone(line) {
 			done = true
 		}
 		if first && proxy.HasContentDelta(line) {
