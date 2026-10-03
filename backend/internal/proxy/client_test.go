@@ -71,3 +71,18 @@ func TestHasContentDelta(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSSEDone(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"data:[DONE]", true}, {"data: [DONE]", true}, {"data:[DONE]\r", true},
+		{": [DONE]", false}, {"event:[DONE]", false}, {"data: [DONE]extra", false},
+		{"data: {\"choices\":[]}", false},
+	} {
+		if got := IsSSEDone(tc.line); got != tc.want {
+			t.Errorf("%q: got %t want %t", tc.line, got, tc.want)
+		}
+	}
+}
