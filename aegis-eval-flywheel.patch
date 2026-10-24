@@ -1,0 +1,1594 @@
+From e55cb28a5ebc5b0f210a59475f7283841011fcf0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E7=AE=80=E4=BA=91=E7=BF=8A?= <16671100373@163.com>
+Date: Sat, 24 Oct 2026 22:42:47 +0800
+Subject: [PATCH] fix eval flywheel scoring and reporting
+
+---
+ backend/go.mod                                |   2 +
+ backend/go.sum                                |   4 +
+ backend/internal/handler/proxy.go             |  34 +-
+ backend/internal/model/eval.go                |  21 +-
+ backend/internal/model/usage_log.go           |   3 +-
+ backend/internal/service/evals.go             | 395 ++++++++++-----
+ backend/internal/service/evals_test.go        | 459 ++++++++++++++++++
+ .../service/testdata/eval_regression.json     |  23 +
+ backend/migrations/001_init.sql               |   5 +-
+ .../migrations/002_eval_prompt_storage.sql    |  34 ++
+ ...13\346\265\213\346\212\245\345\221\212.md" |   6 +-
+ ...20\347\273\264\346\211\213\345\206\214.md" |   5 +-
+ web/app/evals/page.tsx                        |  68 ++-
+ web/lib/types.ts                              |  30 +-
+ 14 files changed, 939 insertions(+), 150 deletions(-)
+ create mode 100644 backend/internal/service/evals_test.go
+ create mode 100644 backend/internal/service/testdata/eval_regression.json
+ create mode 100644 backend/migrations/002_eval_prompt_storage.sql
+
+diff --git a/backend/go.mod b/backend/go.mod
+index 490fb75..efd4218 100644
+--- a/backend/go.mod
++++ b/backend/go.mod
+@@ -8,6 +8,7 @@ require (
+ 	github.com/redis/go-redis/v9 v9.5.1
+ 	golang.org/x/crypto v0.55.0
+ 	gorm.io/driver/mysql v1.5.7
++	gorm.io/driver/sqlite v1.5.7
+ 	gorm.io/gorm v1.25.10
+ )
+ 
+@@ -31,6 +32,7 @@ require (
+ 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
+ 	github.com/leodido/go-urn v1.4.0 // indirect
+ 	github.com/mattn/go-isatty v0.0.20 // indirect
++	github.com/mattn/go-sqlite3 v1.14.22 // indirect
+ 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+ 	github.com/modern-go/reflect2 v1.0.2 // indirect
+ 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
+diff --git a/backend/go.sum b/backend/go.sum
+index 8c8c119..e22938d 100644
+--- a/backend/go.sum
++++ b/backend/go.sum
+@@ -54,6 +54,8 @@ github.com/leodido/go-urn v1.4.0 h1:WT9HwE9SGECu3lg4d/dIA+jxlljEa1/ffXKmRjqdmIQ=
+ github.com/leodido/go-urn v1.4.0/go.mod h1:bvxc+MVxLKB4z00jd1z+Dvzr47oO32F/QSNjSBOlFxI=
+ github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
+ github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
++github.com/mattn/go-sqlite3 v1.14.22 h1:2gZY6PC6kBnID23Tichd1K+Z0oS6nE/XwU+Vz/5o4kU=
++github.com/mattn/go-sqlite3 v1.14.22/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
+ github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
+ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=
+ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
+@@ -105,6 +107,8 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+ gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+ gorm.io/driver/mysql v1.5.7 h1:MndhOPYOfEp2rHKgkZIhJ16eVUIRf2HmzgoPmh7FCWo=
+ gorm.io/driver/mysql v1.5.7/go.mod h1:sEtPWMiqiN1N1cMXoXmBbd8C6/l+TESwriotuRRpkDM=
++gorm.io/driver/sqlite v1.5.7 h1:8NvsrhP0ifM7LX9G4zPB97NwovUakUxc+2V2uuf3Z1I=
++gorm.io/driver/sqlite v1.5.7/go.mod h1:U+J8craQU6Fzkcvu8oLeAQmi50TkwPEhHDEjQZXDah4=
+ gorm.io/gorm v1.25.7/go.mod h1:hbnx/Oo0ChWMn1BIhpy1oYozzpM15i4YPuHDmfYtwg8=
+ gorm.io/gorm v1.25.10 h1:dQpO+33KalOA+aFYGlK+EfxcI5MbO7EP2yYygwh9h+s=
+ gorm.io/gorm v1.25.10/go.mod h1:hbnx/Oo0ChWMn1BIhpy1oYozzpM15i4YPuHDmfYtwg8=
+diff --git a/backend/internal/handler/proxy.go b/backend/internal/handler/proxy.go
+index e062c29..992212f 100644
+--- a/backend/internal/handler/proxy.go
++++ b/backend/internal/handler/proxy.go
+@@ -27,12 +27,14 @@ import (
+ // ---- OpenAI 协议请求结构（仅解析代理所需字段，其余透传）----
+ 
+ type openaiChatReq struct {
+-	Model    string `json:"model"`
+-	Stream   bool   `json:"stream"`
+-	Messages []struct {
+-		Role    string `json:"role"`
+-		Content string `json:"content"`
+-	} `json:"messages"`
++	Model    string        `json:"model"`
++	Stream   bool          `json:"stream"`
++	Messages []chatMessage `json:"messages"`
++}
++
++type chatMessage struct {
++	Role    string `json:"role"`
++	Content string `json:"content"`
+ }
+ 
+ // promptText 拼接消息内容供启发式路由使用（截断避免过大）。
+@@ -48,7 +50,7 @@ func (r openaiChatReq) promptText() string {
+ 	return t
+ }
+ 
+-// promptPreview 截断为 500 字（评测采样用；企业版此处应接脱敏）。
++// promptPreview 截断为 500 字，供普通日志展示。
+ func (r openaiChatReq) promptPreview() string {
+ 	t := r.promptText()
+ 	if len([]rune(t)) > 500 {
+@@ -57,6 +59,15 @@ func (r openaiChatReq) promptPreview() string {
+ 	return t
+ }
+ 
++// promptForEval 保留成功聊天请求的完整 role/content 序列，仅供评测采样使用。
++func (r openaiChatReq) promptForEval() string {
++	encoded, err := json.Marshal(r.Messages)
++	if err != nil {
++		return ""
++	}
++	return string(encoded)
++}
++
+ // ---- 辅助 ----
+ 
+ func abortOpenAI(c *gin.Context, status int, msg string) {
+@@ -185,6 +196,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
+ 				log.RoutedBy = dec.RoutedBy
+ 				log.UpstreamModel = dec.Requested
+ 				log.PromptPreview = req.promptPreview()
++				log.PromptForEval = req.promptForEval()
+ 				persistUsage(d.Repo, apiKey, log)
+ 				c.Data(http.StatusOK, "application/json", []byte(cachedBody))
+ 				return
+@@ -257,7 +269,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
+ 		}
+ 
+ 		if req.Stream {
+-			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body, req.promptPreview())
++			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body, req.promptPreview(), req.promptForEval())
+ 			return
+ 		}
+ 
+@@ -277,6 +289,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
+ 		log.RoutedBy = dec.RoutedBy
+ 		log.UpstreamModel = dec.Requested
+ 		log.PromptPreview = req.promptPreview()
++		log.PromptForEval = req.promptForEval()
+ 		persistUsage(d.Repo, apiKey, log)
+ 
+ 		// 计费：预算累计（仅对设置了月度预算的 Key 生效）
+@@ -300,7 +313,7 @@ func chatCacheKey(modelName string, body []byte) string {
+ }
+ 
+ // streamChatForward SSE 逐块转发上游响应，统计 TTFT 与 usage。
+-func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader, preview string) {
++func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader, preview, promptForEval string) {
+ 	c.Header("Content-Type", "text/event-stream")
+ 	c.Header("Cache-Control", "no-cache")
+ 	c.Header("Connection", "keep-alive")
+@@ -369,6 +382,9 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
+ 	log.RoutedBy = dec.RoutedBy
+ 	log.UpstreamModel = dec.Requested
+ 	log.PromptPreview = truncateRunes(preview, 500)
++	if status == 0 {
++		log.PromptForEval = promptForEval
++	}
+ 	persistUsage(d.Repo, apiKey, log)
+ 
+ 	if log.Cost > 0 && apiKey.BudgetMonthly > 0 {
+diff --git a/backend/internal/model/eval.go b/backend/internal/model/eval.go
+index 4406cfa..37412fc 100644
+--- a/backend/internal/model/eval.go
++++ b/backend/internal/model/eval.go
+@@ -17,13 +17,14 @@ func (EvalDataset) TableName() string { return "eval_datasets" }
+ 
+ // EvalSample 评测样本：来自真实调用采样或人工录入。
+ type EvalSample struct {
+-	ID        uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+-	DatasetID uint64    `gorm:"not null;index" json:"dataset_id"`
+-	Prompt    string    `gorm:"type:text;not null" json:"prompt"`
+-	Reference string    `gorm:"type:text" json:"reference"` // 参考答案（可选）
+-	Source    string    `gorm:"size:16;not null;default:manual" json:"source"` // sampled / manual
+-	Label     *int8     `json:"label"`                     // 人工标注：1 好 0 差 NULL 未标
+-	CreatedAt time.Time `json:"created_at"`
++	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
++	DatasetID    uint64    `gorm:"not null;index" json:"dataset_id"`
++	Prompt       string    `gorm:"type:text;not null" json:"prompt"`
++	ChatMessages string    `gorm:"type:text" json:"-"`                            // 内部保存的完整 OpenAI 聊天上下文，不由样本 API 返回
++	Reference    string    `gorm:"type:text" json:"reference"`                    // 参考答案（可选）
++	Source       string    `gorm:"size:16;not null;default:manual" json:"source"` // sampled / manual
++	Label        *int8     `json:"label"`                                         // 人工标注：1 好 0 差 NULL 未标
++	CreatedAt    time.Time `json:"created_at"`
+ }
+ 
+ // TableName 指定表名。
+@@ -35,9 +36,9 @@ type EvalRun struct {
+ 	DatasetID  uint64     `gorm:"not null;index" json:"dataset_id"`
+ 	ModelA     string     `gorm:"size:64;not null" json:"model_a"`
+ 	ModelB     string     `gorm:"size:64;not null" json:"model_b"`
+-	Status     int8       `gorm:"not null;default:0" json:"status"` // 0 运行中 1 完成 2 失败
+-	ScoreA     float64    `gorm:"type:decimal(5,2)" json:"score_a"`
+-	ScoreB     float64    `gorm:"type:decimal(5,2)" json:"score_b"`
++	Status     int8       `gorm:"not null;default:0" json:"status"` // 0 运行中 1 完成 2 失败 3 部分完成
++	ScoreA     *float64   `gorm:"type:decimal(5,2)" json:"score_a"`
++	ScoreB     *float64   `gorm:"type:decimal(5,2)" json:"score_b"`
+ 	CostA      float64    `gorm:"type:decimal(12,6)" json:"cost_a"`
+ 	CostB      float64    `gorm:"type:decimal(12,6)" json:"cost_b"`
+ 	LatencyA   int        `json:"latency_a"` // 平均延迟 ms
+diff --git a/backend/internal/model/usage_log.go b/backend/internal/model/usage_log.go
+index 3c228c7..f56848a 100644
+--- a/backend/internal/model/usage_log.go
++++ b/backend/internal/model/usage_log.go
+@@ -16,13 +16,14 @@ type UsageLog struct {
+ 	TotalTokens      int       `json:"total_tokens"`
+ 	Cost             float64   `gorm:"type:decimal(12,6);not null;default:0" json:"cost"` // 元
+ 	LatencyMs        int       `json:"latency_ms"`
+-	TTFTMs           *int      `json:"ttft_ms"` // 流式首字延迟
++	TTFTMs           *int      `json:"ttft_ms"`                          // 流式首字延迟
+ 	Status           int16     `gorm:"not null;default:0" json:"status"` // 0 成功 / 4xx / 5xx
+ 	ErrorCode        string    `gorm:"size:32" json:"error_code"`
+ 	Cached           int8      `gorm:"not null;default:0" json:"cached"`
+ 	RoutedBy         string    `gorm:"size:16" json:"routed_by"` // manual / rule / heuristic / llm
+ 	UpstreamModel    string    `gorm:"size:64" json:"upstream_model"`
+ 	PromptPreview    string    `gorm:"size:500" json:"prompt_preview"` // 截断的 prompt（评测采样用；企业版需脱敏）
++	PromptForEval    string    `gorm:"type:text" json:"-"`             // 完整聊天上下文，仅供评测采样；不随普通日志 API 返回
+ 	CreatedAt        time.Time `gorm:"index:idx_key_time,priority:2;index:idx_model_time,priority:2" json:"created_at"`
+ }
+ 
+diff --git a/backend/internal/service/evals.go b/backend/internal/service/evals.go
+index f5e674d..d08ca0a 100644
+--- a/backend/internal/service/evals.go
++++ b/backend/internal/service/evals.go
+@@ -16,8 +16,7 @@ import (
+ 	"aegis-gateway/internal/repository"
+ )
+ 
+-// EvalService 评测飞轮（PRD Epic-8）：
+-// 真实调用采样 → 人工打标 → A/B 模型回归评测（质量分 + 成本 + 延迟）。
++// EvalService 评测飞轮：真实调用采样 → 人工标注 → 同题盲测回归。
+ type EvalService struct {
+ 	repo      *repository.Repository
+ 	providers *ProviderService
+@@ -68,7 +67,8 @@ func (s *EvalService) LabelSample(sampleID uint64, label int8) error {
+ 		Update("label", label).Error
+ }
+ 
+-// SampleFromLogs 从真实调用日志采样（分层：按模型），去重后写入数据集。
++// SampleFromLogs 从全时间范围的真实调用日志中随机采样，优先使用完整聊天消息。
++// 旧记录只有 preview：恰好达到 500 字的记录可能已被截断，因此不导入数据集。
+ func (s *EvalService) SampleFromLogs(datasetID uint64, count int, modelName string) (int, error) {
+ 	if count <= 0 || count > 100 {
+ 		count = 10
+@@ -78,24 +78,60 @@ func (s *EvalService) SampleFromLogs(datasetID uint64, count int, modelName stri
+ 	if modelName != "" {
+ 		q = q.Where("model_name = ?", modelName)
+ 	}
++	order := "RANDOM()"
++	if s.repo.DB.Dialector.Name() == "mysql" {
++		order = "RAND()"
++	}
+ 	var logs []model.UsageLog
+-	if err := q.Order("id DESC").Limit(count * 3).Find(&logs).Error; err != nil {
++	if err := q.Order(order).Limit(count * 20).Find(&logs).Error; err != nil {
+ 		return 0, err
+ 	}
+ 
+-	seen := map[string]bool{}
++	existing, err := s.ListSamples(datasetID)
++	if err != nil {
++		return 0, err
++	}
++	seen := make(map[string]bool, len(existing)+len(logs))
++	for _, sample := range existing {
++		if p := strings.TrimSpace(sample.Prompt); p != "" {
++			seen["prompt:"+p] = true
++		}
++		if sample.ChatMessages != "" {
++			seen["messages:"+sample.ChatMessages] = true
++		}
++	}
+ 	added := 0
+-	for _, l := range logs {
++	for _, log := range logs {
+ 		if added >= count {
+ 			break
+ 		}
+-		p := strings.TrimSpace(l.PromptPreview)
+-		if p == "" || seen[p] {
++		messages := strings.TrimSpace(log.PromptForEval)
++		prompt := ""
++		source := "sampled"
++		if messages != "" {
++			prompt = lastUserMessage(messages)
++			if prompt == "" {
++				continue
++			}
++		} else {
++			prompt = strings.TrimSpace(log.PromptPreview)
++			if prompt == "" || len([]rune(prompt)) >= 500 {
++				continue
++			}
++			source = "sampled_legacy"
++		}
++		promptKey := "prompt:" + prompt
++		key := promptKey
++		if messages != "" {
++			key = "messages:" + messages
++		}
++		if seen[key] || seen[promptKey] {
+ 			continue
+ 		}
+-		seen[p] = true
++		seen[key] = true
++		seen[promptKey] = true
+ 		if err := s.repo.DB.Create(&model.EvalSample{
+-			DatasetID: datasetID, Prompt: p, Source: "sampled",
++			DatasetID: datasetID, Prompt: prompt, ChatMessages: messages, Source: source,
+ 		}).Error; err != nil {
+ 			return added, err
+ 		}
+@@ -106,23 +142,48 @@ func (s *EvalService) SampleFromLogs(datasetID uint64, count int, modelName stri
+ 
+ // ---- A/B 回归 ----
+ 
+-// EvalSampleResult 单样本回归结果。
++// EvalSampleResult 单样本回归结果。失败的一侧仍保留另一侧成功结果。
+ type EvalSampleResult struct {
+-	Index    int     `json:"index"`
+-	Prompt   string  `json:"prompt"`
+-	ScoreA   float64 `json:"score_a"`
+-	LatencyA int     `json:"latency_a_ms"`
+-	CostA    float64 `json:"cost_a"`
+-	OutA     string  `json:"out_a_preview"`
+-	ScoreB   float64 `json:"score_b"`
+-	LatencyB int     `json:"latency_b_ms"`
+-	CostB    float64 `json:"cost_b"`
+-	OutB     string  `json:"out_b_preview"`
++	Index      int      `json:"index"`
++	SampleID   uint64   `json:"sample_id"`
++	Prompt     string   `json:"prompt"`
++	Reference  string   `json:"reference,omitempty"`
++	Label      *int8    `json:"label,omitempty"`
++	ScoreA     *float64 `json:"score_a"`
++	LatencyA   int      `json:"latency_a_ms"`
++	CostA      float64  `json:"cost_a"`
++	OutA       string   `json:"out_a_preview"`
++	ErrorA     string   `json:"error_a,omitempty"`
++	ScoreB     *float64 `json:"score_b"`
++	LatencyB   int      `json:"latency_b_ms"`
++	CostB      float64  `json:"cost_b"`
++	OutB       string   `json:"out_b_preview"`
++	ErrorB     string   `json:"error_b,omitempty"`
++	JudgeError string   `json:"judge_error,omitempty"`
++}
++
++// EvalReportSummary 运行级统计。评测费用仅统计候选模型，不含 judge 调用。
++type EvalReportSummary struct {
++	TotalSamples     int     `json:"total_samples"`
++	ScoredPairs      int     `json:"scored_pairs"`
++	SuccessfulA      int     `json:"successful_a"`
++	SuccessfulB      int     `json:"successful_b"`
++	FailedA          int     `json:"failed_a"`
++	FailedB          int     `json:"failed_b"`
++	JudgeFailures    int     `json:"judge_failures"`
++	FailureCount     int     `json:"failure_count"`
++	ScoringAvailable bool    `json:"scoring_available"`
++	JudgeCost        float64 `json:"judge_cost"`
++	Note             string  `json:"note,omitempty"`
++}
++
++type EvalRunReport struct {
++	Summary EvalReportSummary  `json:"summary"`
++	Samples []EvalSampleResult `json:"samples"`
+ }
+ 
+-// RunEvaluation 对数据集跑一次 A/B 回归：两个模型分别回答全部样本，
+-// 打分采用 LLM-as-judge（模型目录中存在名为 judge 的模型时）或启发式兜底，
+-// 汇总质量分/成本/延迟后写入 eval_runs。
++// RunEvaluation 对数据集做同题 A/B 回归。两份输出在一次 judge 请求中以匿名候选成对评分。
++// 未配置或不可用的 judge 不会退化成长度分；此时结果明确标为部分完成。
+ func (s *EvalService) RunEvaluation(ctx context.Context, datasetID uint64, modelA, modelB string) (*model.EvalRun, error) {
+ 	samples, err := s.ListSamples(datasetID)
+ 	if err != nil {
+@@ -132,12 +193,12 @@ func (s *EvalService) RunEvaluation(ctx context.Context, datasetID uint64, model
+ 		return nil, errors.New("数据集中没有样本")
+ 	}
+ 	ma, err := s.models.GetByName(modelA)
+-	if err != nil {
+-		return nil, fmt.Errorf("未知模型 A: %s", modelA)
++	if err != nil || ma.Enabled != 1 {
++		return nil, fmt.Errorf("未知或未启用模型 A: %s", modelA)
+ 	}
+ 	mb, err := s.models.GetByName(modelB)
+-	if err != nil {
+-		return nil, fmt.Errorf("未知模型 B: %s", modelB)
++	if err != nil || mb.Enabled != 1 {
++		return nil, fmt.Errorf("未知或未启用模型 B: %s", modelB)
+ 	}
+ 
+ 	run := &model.EvalRun{DatasetID: datasetID, ModelA: modelA, ModelB: modelB, Status: 0, CreatedAt: time.Now()}
+@@ -145,52 +206,111 @@ func (s *EvalService) RunEvaluation(ctx context.Context, datasetID uint64, model
+ 		return nil, err
+ 	}
+ 
+-	results := make([]EvalSampleResult, 0, len(samples))
+-	var (
+-		sumScoreA, sumScoreB, sumCostA, sumCostB float64
+-		sumLatA, sumLatB                         int
+-	)
++	var judge *model.Model
++	judge, judgeLookupErr := s.models.GetByName("judge")
++	if judgeLookupErr != nil {
++		judgeLookupErr = errors.New("judge 模型未配置")
++	} else if judge.Enabled != 1 {
++		judgeLookupErr = errors.New("judge 模型未启用")
++	}
++
++	report := EvalRunReport{
++		Summary: EvalReportSummary{TotalSamples: len(samples)},
++		Samples: make([]EvalSampleResult, 0, len(samples)),
++	}
++	var sumScoreA, sumScoreB, sumCostA, sumCostB, sumJudgeCost float64
++	var sumLatA, sumLatB, callsA, callsB, scoredPairs int
++
+ 	for i, sp := range samples {
+-		outA, latA, costA, errA := s.callModel(ctx, ma, sp.Prompt)
+-		outB, latB, costB, errB := s.callModel(ctx, mb, sp.Prompt)
+-		if errA != nil || errB != nil {
+-			continue // 单样本失败跳过，不影响整体报告
++		result := EvalSampleResult{
++			Index: i + 1, SampleID: sp.ID, Prompt: sp.Prompt,
++			Reference: sp.Reference, Label: sp.Label,
+ 		}
+-		scoreA := s.judgeScore(ctx, outA)
+-		scoreB := s.judgeScore(ctx, outB)
+-
+-		sumScoreA += scoreA
+-		sumScoreB += scoreB
+-		sumCostA += costA
+-		sumCostB += costB
+-		sumLatA += latA
+-		sumLatB += latB
+-
+-		results = append(results, EvalSampleResult{
+-			Index: i, Prompt: truncate(sp.Prompt, 120),
+-			ScoreA: scoreA, LatencyA: latA, CostA: costA, OutA: truncate(outA, 160),
+-			ScoreB: scoreB, LatencyB: latB, CostB: costB, OutB: truncate(outB, 160),
+-		})
+-	}
+-
+-	n := len(results)
+-	if n == 0 {
+-		run.Status = 2 // 失败
+-	} else {
+-		run.Status = 1
+-		run.ScoreA = round2(sumScoreA / float64(n))
+-		run.ScoreB = round2(sumScoreB / float64(n))
++		outA, latA, costA, errA := s.callModelWithMessages(ctx, ma, sp.Prompt, sp.ChatMessages)
++		outB, latB, costB, errB := s.callModelWithMessages(ctx, mb, sp.Prompt, sp.ChatMessages)
++		result.LatencyA, result.CostA, result.OutA = latA, costA, truncate(outA, 160)
++		result.LatencyB, result.CostB, result.OutB = latB, costB, truncate(outB, 160)
++		if errA == nil {
++			report.Summary.SuccessfulA++
++			sumCostA += costA
++			sumLatA += latA
++			callsA++
++		} else {
++			result.ErrorA = errA.Error()
++			report.Summary.FailedA++
++		}
++		if errB == nil {
++			report.Summary.SuccessfulB++
++			sumCostB += costB
++			sumLatB += latB
++			callsB++
++		} else {
++			result.ErrorB = errB.Error()
++			report.Summary.FailedB++
++		}
++
++		if errA == nil && errB == nil {
++			if judgeLookupErr != nil {
++				result.JudgeError = judgeLookupErr.Error()
++				report.Summary.JudgeFailures++
++			} else {
++				// 按样本与运行 ID 交替匿名候选顺序，平衡 judge 的位置偏差。
++				aFirst := (i+int(run.ID))%2 == 0
++				scoreA, scoreB, judgeCost, judgeErr := s.judgePair(ctx, judge, sp, outA, outB, aFirst)
++				sumJudgeCost += judgeCost
++				if judgeErr != nil {
++					result.JudgeError = judgeErr.Error()
++					report.Summary.JudgeFailures++
++				} else {
++					result.ScoreA, result.ScoreB = &scoreA, &scoreB
++					sumScoreA += scoreA
++					sumScoreB += scoreB
++					scoredPairs++
++				}
++			}
++		}
++		report.Samples = append(report.Samples, result)
++	}
++
++	report.Summary.ScoredPairs = scoredPairs
++	report.Summary.FailureCount = report.Summary.FailedA + report.Summary.FailedB + report.Summary.JudgeFailures
++	report.Summary.ScoringAvailable = scoredPairs > 0
++	report.Summary.JudgeCost = round6(sumJudgeCost)
++	if report.Summary.FailureCount > 0 {
++		report.Summary.Note = "存在模型调用或评分失败；查看逐样本错误，质量分仅基于成功评分的配对样本。"
++	}
++	if judgeLookupErr != nil {
++		report.Summary.Note = "未配置 judge，未生成质量分；配置 judge 后重新运行。"
++	}
++
++	if scoredPairs > 0 {
++		scoreA, scoreB := round2(sumScoreA/float64(scoredPairs)), round2(sumScoreB/float64(scoredPairs))
++		run.ScoreA, run.ScoreB = &scoreA, &scoreB
++	}
++	if callsA > 0 {
+ 		run.CostA = round6(sumCostA)
++		run.LatencyA = sumLatA / callsA
++	}
++	if callsB > 0 {
+ 		run.CostB = round6(sumCostB)
+-		run.LatencyA = sumLatA / n
+-		run.LatencyB = sumLatB / n
++		run.LatencyB = sumLatB / callsB
++	}
++	if report.Summary.FailureCount == 0 {
++		run.Status = 1
++	} else if report.Summary.SuccessfulA+report.Summary.SuccessfulB > 0 {
++		run.Status = 3 // 部分完成：保留可用结果但有样本或评分失败
++	} else {
++		run.Status = 2
++	}
++
++	encoded, err := json.Marshal(report)
++	if err != nil {
++		return nil, err
+ 	}
+-	report, _ := json.Marshal(results)
+-	rs := string(report)
+-	run.Report = &rs
++	reportJSON := string(encoded)
++	run.Report = &reportJSON
+ 	now := time.Now()
+ 	run.FinishedAt = &now
+-
+ 	if err := s.repo.DB.Save(run).Error; err != nil {
+ 		return nil, err
+ 	}
+@@ -215,8 +335,30 @@ func (s *EvalService) ListRuns() ([]model.EvalRun, error) {
+ 
+ // ---- 内部 ----
+ 
++type evalChatMessage struct {
++	Role    string `json:"role"`
++	Content string `json:"content"`
++}
++
++func lastUserMessage(encoded string) string {
++	var messages []evalChatMessage
++	if err := json.Unmarshal([]byte(encoded), &messages); err != nil {
++		return ""
++	}
++	for i := len(messages) - 1; i >= 0; i-- {
++		if messages[i].Role == "user" && strings.TrimSpace(messages[i].Content) != "" {
++			return messages[i].Content
++		}
++	}
++	return ""
++}
++
+ // callModel 调用单个模型（非流式），返回输出内容/延迟/成本。
+ func (s *EvalService) callModel(ctx context.Context, m *model.Model, prompt string) (string, int, float64, error) {
++	return s.callModelWithMessages(ctx, m, prompt, "")
++}
++
++func (s *EvalService) callModelWithMessages(ctx context.Context, m *model.Model, prompt, encodedMessages string) (string, int, float64, error) {
+ 	p, err := s.providers.Get(m.ProviderID)
+ 	if err != nil || p.Enabled != 1 {
+ 		return "", 0, 0, errors.New("provider unavailable")
+@@ -225,11 +367,18 @@ func (s *EvalService) callModel(ctx context.Context, m *model.Model, prompt stri
+ 	if err != nil || key == "" {
+ 		return "", 0, 0, errors.New("provider api key not configured")
+ 	}
+-	body, _ := json.Marshal(map[string]any{
+-		"model":    m.Name,
+-		"stream":   false,
+-		"messages": []map[string]string{{"role": "user", "content": prompt}},
++	messages := []evalChatMessage{{Role: "user", Content: prompt}}
++	if encodedMessages != "" {
++		if err := json.Unmarshal([]byte(encodedMessages), &messages); err != nil || len(messages) == 0 {
++			return "", 0, 0, errors.New("invalid sampled chat messages")
++		}
++	}
++	body, err := json.Marshal(map[string]any{
++		"model": m.Name, "stream": false, "messages": messages,
+ 	})
++	if err != nil {
++		return "", 0, 0, err
++	}
+ 	req, err := proxy.NewRequest(ctx, "POST", proxy.ResolveURL(p.BaseURL, "/chat/completions"), key, body)
+ 	if err != nil {
+ 		return "", 0, 0, err
+@@ -237,68 +386,96 @@ func (s *EvalService) callModel(ctx context.Context, m *model.Model, prompt stri
+ 	start := time.Now()
+ 	resp, err := s.upstream.Do(req)
+ 	if err != nil {
+-		return "", 0, 0, err
++		return "", int(time.Since(start).Milliseconds()), 0, err
+ 	}
+ 	defer resp.Body.Close()
+ 	raw, err := io.ReadAll(resp.Body)
++	latency := int(time.Since(start).Milliseconds())
+ 	if err != nil {
+-		return "", 0, 0, err
++		return "", latency, 0, err
+ 	}
+ 	if resp.StatusCode >= 400 {
+-		return "", 0, 0, fmt.Errorf("upstream http %d", resp.StatusCode)
++		return "", latency, 0, fmt.Errorf("upstream http %d", resp.StatusCode)
+ 	}
+ 	pt, ct := proxy.ParseUsageFromBody(raw)
+-	latency := int(time.Since(start).Milliseconds())
+ 	cost := float64(pt)/1000.0*m.PriceIn + float64(ct)/1000.0*m.PriceOut
+ 	return proxy.ParseContentFromBody(raw), latency, cost, nil
+ }
+ 
+-// judgeScore 质量评分：LLM-as-judge（judge 模型存在时）或启发式兜底。
+-func (s *EvalService) judgeScore(ctx context.Context, output string) float64 {
+-	// 扩展点：模型目录中配置名为 judge 的模型则启用 LLM-as-judge
+-	if judge, err := s.models.GetByName("judge"); err == nil {
+-		instruction := "你是评分员。请对下面的回答按质量打分（1-10），只输出 JSON：{\"score\": n}\n\n回答：\n" + truncate(output, 2000)
+-		out, _, _, err := s.callModel(ctx, judge, instruction)
+-		if err == nil {
+-			if score, ok := parseScoreFromJudge(out); ok {
+-				return score
+-			}
++type judgeContext struct {
++	Prompt       string            `json:"prompt"`
++	Messages     []evalChatMessage `json:"messages,omitempty"`
++	Reference    string            `json:"reference,omitempty"`
++	HumanLabel   *int8             `json:"human_label,omitempty"`
++	CandidateOne string            `json:"candidate_1"`
++	CandidateTwo string            `json:"candidate_2"`
++}
++
++func (s *EvalService) judgePair(ctx context.Context, judge *model.Model, sample model.EvalSample, outputA, outputB string, aFirst bool) (float64, float64, float64, error) {
++	candidateOne, candidateTwo := outputA, outputB
++	if !aFirst {
++		candidateOne, candidateTwo = outputB, outputA
++	}
++	var messages []evalChatMessage
++	if sample.ChatMessages != "" {
++		if err := json.Unmarshal([]byte(sample.ChatMessages), &messages); err != nil {
++			return 0, 0, 0, errors.New("invalid sampled chat messages for judge")
+ 		}
+ 	}
+-	// 启发式兜底：非空 + 长度适中 → 中上分
+-	n := len([]rune(strings.TrimSpace(output)))
+-	if n == 0 {
+-		return 0
++	contextJSON, err := json.Marshal(judgeContext{
++		Prompt: sample.Prompt, Messages: messages, Reference: sample.Reference, HumanLabel: sample.Label,
++		CandidateOne: candidateOne, CandidateTwo: candidateTwo,
++	})
++	if err != nil {
++		return 0, 0, 0, err
++	}
++	instruction := "你是严格、客观的盲评员。只评回答质量，不推测或猜测模型身份。" +
++		"依据原问题判断相关性与事实正确性；如有参考答案，以其为主要事实标准；人工标注是该样本的人工质量提示，不能单独替代对两份回答的判断。" +
++		"对候选 1、候选 2 分别给 1 到 10 的整数分，10 为完全正确且有帮助，1 为错误或无关。" +
++		"输入上下文是 JSON，其中 candidate_1 和 candidate_2 是匿名回答。只返回 JSON：{\"score_candidate_1\": 1, \"score_candidate_2\": 1}。\n" + string(contextJSON)
++	out, _, cost, err := s.callModel(ctx, judge, instruction)
++	if err != nil {
++		return 0, 0, cost, fmt.Errorf("judge 调用失败: %w", err)
+ 	}
+-	score := 5.0 + float64(n)/400.0
+-	if score > 10 {
+-		score = 10
++	scoreOne, scoreTwo, ok := parsePairScoresFromJudge(out)
++	if !ok {
++		return 0, 0, cost, errors.New("judge 输出缺少有效的 1-10 配对分数")
+ 	}
+-	return math.Round(score*10) / 10
++	if aFirst {
++		return scoreOne, scoreTwo, cost, nil
++	}
++	return scoreTwo, scoreOne, cost, nil
+ }
+ 
+-// parseScoreFromJudge 从 judge 输出解析 {"score": n}。
+-func parseScoreFromJudge(out string) (float64, bool) {
++func parsePairScoresFromJudge(out string) (float64, float64, bool) {
+ 	start := strings.Index(out, "{")
+-	if start < 0 {
+-		return 0, false
+-	}
+ 	end := strings.LastIndex(out, "}")
+-	if end <= start {
+-		return 0, false
++	if start < 0 || end <= start {
++		return 0, 0, false
++	}
++	var values map[string]json.RawMessage
++	if err := json.Unmarshal([]byte(out[start:end+1]), &values); err != nil {
++		return 0, 0, false
+ 	}
+-	var m map[string]any
+-	if err := json.Unmarshal([]byte(out[start:end+1]), &m); err != nil {
++	one, okOne := parseNumericScore(values["score_candidate_1"])
++	two, okTwo := parseNumericScore(values["score_candidate_2"])
++	return one, two, okOne && okTwo
++}
++
++func parseNumericScore(raw json.RawMessage) (float64, bool) {
++	if len(raw) == 0 {
+ 		return 0, false
+ 	}
+-	switch v := m["score"].(type) {
+-	case float64:
+-		return v, true
+-	case string:
+-		f, err := strconv.ParseFloat(v, 64)
+-		return f, err == nil
++	var number float64
++	if json.Unmarshal(raw, &number) == nil {
++		return number, number >= 1 && number <= 10
++	}
++	var text string
++	if json.Unmarshal(raw, &text) != nil {
++		return 0, false
+ 	}
+-	return 0, false
++	number, err := strconv.ParseFloat(text, 64)
++	return number, err == nil && number >= 1 && number <= 10
+ }
+ 
+ func truncate(s string, n int) string {
+diff --git a/backend/internal/service/evals_test.go b/backend/internal/service/evals_test.go
+new file mode 100644
+index 0000000..e97f24e
+--- /dev/null
++++ b/backend/internal/service/evals_test.go
+@@ -0,0 +1,459 @@
++package service
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"math"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"aegis-gateway/internal/model"
++	"aegis-gateway/internal/proxy"
++	"aegis-gateway/internal/repository"
++
++	"gorm.io/driver/sqlite"
++	"gorm.io/gorm"
++)
++
++type regressionFixture struct {
++	Name      string            `json:"name"`
++	Prompt    string            `json:"prompt"`
++	Reference string            `json:"reference"`
++	Label     int8              `json:"label"`
++	Messages  []evalChatMessage `json:"messages"`
++}
++
++type recordedChatRequest struct {
++	Model    string            `json:"model"`
++	Messages []evalChatMessage `json:"messages"`
++}
++
++type recordedJudgeContext struct {
++	Prompt       string            `json:"prompt"`
++	Messages     []evalChatMessage `json:"messages"`
++	Reference    string            `json:"reference"`
++	HumanLabel   *int8             `json:"human_label"`
++	CandidateOne string            `json:"candidate_1"`
++	CandidateTwo string            `json:"candidate_2"`
++}
++
++type evalTestHarness struct {
++	service       *EvalService
++	db            *gorm.DB
++	datasetID     uint64
++	fixtures      []regressionFixture
++	server        *httptest.Server
++	mu            sync.Mutex
++	candidateReqs []recordedChatRequest
++	judgeContexts []recordedJudgeContext
++	withJudge     bool
++	failSecondB   bool
++}
++
++func loadEvalRegressionFixtures(t *testing.T) []regressionFixture {
++	t.Helper()
++	path := filepath.Join("testdata", "eval_regression.json")
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("read fixed eval regression set: %v", err)
++	}
++	var fixtures []regressionFixture
++	if err := json.Unmarshal(data, &fixtures); err != nil {
++		t.Fatalf("decode fixed eval regression set: %v", err)
++	}
++	if len(fixtures) < 2 {
++		t.Fatalf("fixed regression set must include at least two cases")
++	}
++	return fixtures
++}
++
++func newEvalTestHarness(t *testing.T, withJudge, failSecondB bool) *evalTestHarness {
++	t.Helper()
++	h := &evalTestHarness{
++		fixtures:    loadEvalRegressionFixtures(t),
++		withJudge:   withJudge,
++		failSecondB: failSecondB,
++	}
++	h.server = httptest.NewServer(http.HandlerFunc(h.serveModel))
++	t.Cleanup(h.server.Close)
++
++	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
++	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
++	if err != nil {
++		t.Fatalf("open sqlite: %v", err)
++	}
++	sqlDB, err := db.DB()
++	if err != nil {
++		t.Fatalf("get sqlite database: %v", err)
++	}
++	t.Cleanup(func() { _ = sqlDB.Close() })
++	if err := db.AutoMigrate(&model.Provider{}, &model.Model{}, &model.EvalDataset{}, &model.EvalSample{}, &model.EvalRun{}, &model.UsageLog{}); err != nil {
++		t.Fatalf("migrate test schema: %v", err)
++	}
++	h.db = db
++	repo := &repository.Repository{DB: db}
++	providers := NewProviderService(repo, "eval-test-master-secret")
++	provider, err := providers.Create("eval-upstream", h.server.URL, "stub-token", 1, 0)
++	if err != nil {
++		t.Fatalf("create test provider: %v", err)
++	}
++	models := NewModelService(repo)
++	for _, candidate := range []struct {
++		name     string
++		priceIn  float64
++		priceOut float64
++	}{
++		{name: "candidate-a", priceIn: 0.01, priceOut: 0.02},
++		{name: "candidate-b", priceIn: 0.03, priceOut: 0.04},
++	} {
++		if err := models.Create(&model.Model{
++			ProviderID: provider.ID, Name: candidate.name, PriceIn: candidate.priceIn,
++			PriceOut: candidate.priceOut, Enabled: 1,
++		}); err != nil {
++			t.Fatalf("create candidate model %s: %v", candidate.name, err)
++		}
++	}
++	if withJudge {
++		if err := models.Create(&model.Model{
++			ProviderID: provider.ID, Name: "judge", PriceIn: 0.05, PriceOut: 0.06, Enabled: 1,
++		}); err != nil {
++			t.Fatalf("create judge model: %v", err)
++		}
++	}
++	dataset := &model.EvalDataset{Name: "fixed-regression", Description: "local test set", Status: 1}
++	if err := db.Create(dataset).Error; err != nil {
++		t.Fatalf("create eval dataset: %v", err)
++	}
++	for _, fixture := range h.fixtures {
++		messages, err := json.Marshal(fixture.Messages)
++		if err != nil {
++			t.Fatalf("encode messages: %v", err)
++		}
++		label := fixture.Label
++		if err := db.Create(&model.EvalSample{
++			DatasetID: dataset.ID, Prompt: fixture.Prompt, ChatMessages: string(messages),
++			Reference: fixture.Reference, Label: &label, Source: "manual",
++		}).Error; err != nil {
++			t.Fatalf("create eval sample: %v", err)
++		}
++	}
++	h.datasetID = dataset.ID
++	h.service = NewEvalService(repo, providers, models, proxy.NewUpstreamClient(3*time.Second))
++	return h
++}
++
++func (h *evalTestHarness) serveModel(w http.ResponseWriter, r *http.Request) {
++	var request recordedChatRequest
++	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
++		http.Error(w, "bad request", http.StatusBadRequest)
++		return
++	}
++	if request.Model == "judge" {
++		if len(request.Messages) == 0 {
++			http.Error(w, "missing judge prompt", http.StatusBadRequest)
++			return
++		}
++		instruction := request.Messages[0].Content
++		start := strings.Index(instruction, "{\"prompt\"")
++		if start < 0 {
++			http.Error(w, "judge context missing", http.StatusBadRequest)
++			return
++		}
++		var judgeContext recordedJudgeContext
++		if err := json.Unmarshal([]byte(instruction[start:]), &judgeContext); err != nil {
++			http.Error(w, "invalid judge context", http.StatusBadRequest)
++			return
++		}
++		h.mu.Lock()
++		h.judgeContexts = append(h.judgeContexts, judgeContext)
++		h.mu.Unlock()
++		if strings.Contains(instruction, "candidate-a") || strings.Contains(instruction, "candidate-b") {
++			http.Error(w, "candidate identity leaked to judge", http.StatusBadRequest)
++			return
++		}
++		scoreOne, scoreTwo := 2, 2
++		if strings.HasPrefix(judgeContext.CandidateOne, "correct:") {
++			scoreOne = 9
++		}
++		if strings.HasPrefix(judgeContext.CandidateTwo, "correct:") {
++			scoreTwo = 9
++		}
++		content := fmt.Sprintf(`{"score_candidate_1":%d,"score_candidate_2":%d}`, scoreOne, scoreTwo)
++		writeChatResponse(w, content)
++		return
++	}
++
++	prompt := lastUserMessageFromMessages(request.Messages)
++	h.mu.Lock()
++	h.candidateReqs = append(h.candidateReqs, request)
++	h.mu.Unlock()
++	fixture, ok := h.fixtureFor(prompt)
++	if !ok {
++		http.Error(w, "prompt does not match fixed regression set", http.StatusBadRequest)
++		return
++	}
++	if request.Model == "candidate-b" && h.failSecondB && prompt == h.fixtures[0].Prompt {
++		http.Error(w, "injected candidate failure", http.StatusServiceUnavailable)
++		return
++	}
++	if request.Model == "candidate-a" {
++		writeChatResponse(w, "correct: "+fixture.Reference)
++		return
++	}
++	if request.Model == "candidate-b" {
++		writeChatResponse(w, "incorrect: "+strings.Repeat("This is a deliberately verbose but wrong answer. ", 8))
++		return
++	}
++	http.Error(w, "unknown model", http.StatusBadRequest)
++}
++
++func (h *evalTestHarness) fixtureFor(prompt string) (regressionFixture, bool) {
++	for _, fixture := range h.fixtures {
++		if fixture.Prompt == prompt {
++			return fixture, true
++		}
++	}
++	return regressionFixture{}, false
++}
++
++func lastUserMessageFromMessages(messages []evalChatMessage) string {
++	for i := len(messages) - 1; i >= 0; i-- {
++		if messages[i].Role == "user" {
++			return messages[i].Content
++		}
++	}
++	return ""
++}
++
++func writeChatResponse(w http.ResponseWriter, content string) {
++	w.Header().Set("Content-Type", "application/json")
++	_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}],"usage":{"prompt_tokens":10,"completion_tokens":20}}`, content)
++}
++
++func decodeEvalReport(t *testing.T, run *model.EvalRun) EvalRunReport {
++	t.Helper()
++	if run.Report == nil {
++		t.Fatal("run report is nil")
++	}
++	var report EvalRunReport
++	if err := json.Unmarshal([]byte(*run.Report), &report); err != nil {
++		t.Fatalf("decode report: %v", err)
++	}
++	return report
++}
++
++func TestRunEvaluationFixedRegressionSetUsesPairedBlindScores(t *testing.T) {
++	h := newEvalTestHarness(t, true, false)
++	run, err := h.service.RunEvaluation(context.Background(), h.datasetID, "candidate-a", "candidate-b")
++	if err != nil {
++		t.Fatalf("run evaluation: %v", err)
++	}
++	if run.Status != 1 {
++		t.Fatalf("status = %d, want complete (1)", run.Status)
++	}
++	if run.ScoreA == nil || *run.ScoreA != 9 || run.ScoreB == nil || *run.ScoreB != 2 {
++		t.Fatalf("scores = %v / %v, want 9 / 2", run.ScoreA, run.ScoreB)
++	}
++	if math.Abs(run.CostA-0.001) > 1e-9 || math.Abs(run.CostB-0.0022) > 1e-9 {
++		t.Fatalf("costs = %.6f / %.6f, want 0.001000 / 0.002200", run.CostA, run.CostB)
++	}
++	report := decodeEvalReport(t, run)
++	if strings.Contains(*run.Report, "chat_messages") {
++		t.Fatal("run report exposed internal full chat messages")
++	}
++	if report.Summary.TotalSamples != 2 || report.Summary.ScoredPairs != 2 || report.Summary.FailureCount != 0 {
++		t.Fatalf("unexpected report summary: %+v", report.Summary)
++	}
++	if math.Abs(report.Summary.JudgeCost-0.0034) > 1e-9 {
++		t.Fatalf("judge cost = %.6f, want 0.003400", report.Summary.JudgeCost)
++	}
++	if len(report.Samples) != len(h.fixtures) || len(h.judgeContexts) != len(h.fixtures) {
++		t.Fatalf("samples/judge calls = %d/%d, want %d", len(report.Samples), len(h.judgeContexts), len(h.fixtures))
++	}
++	for i, fixture := range h.fixtures {
++		row := report.Samples[i]
++		if row.Prompt != fixture.Prompt || row.Reference != fixture.Reference || row.Label == nil || *row.Label != fixture.Label {
++			t.Fatalf("sample %d lost question/reference/label: %+v", i, row)
++		}
++		judgeCtx := h.judgeContexts[i]
++		if judgeCtx.Prompt != fixture.Prompt || !reflect.DeepEqual(judgeCtx.Messages, fixture.Messages) || judgeCtx.Reference != fixture.Reference || judgeCtx.HumanLabel == nil || *judgeCtx.HumanLabel != fixture.Label {
++			t.Fatalf("judge context %d missing sample context: %+v", i, judgeCtx)
++		}
++		if strings.Contains(judgeCtx.CandidateOne, "candidate-a") || strings.Contains(judgeCtx.CandidateTwo, "candidate-b") {
++			t.Fatalf("model identities leaked into judge candidates: %+v", judgeCtx)
++		}
++	}
++	if len(h.candidateReqs) != len(h.fixtures)*2 {
++		t.Fatalf("candidate calls = %d, want %d", len(h.candidateReqs), len(h.fixtures)*2)
++	}
++	for _, fixture := range h.fixtures {
++		var aMessages, bMessages []evalChatMessage
++		for _, req := range h.candidateReqs {
++			if lastUserMessageFromMessages(req.Messages) != fixture.Prompt {
++				continue
++			}
++			switch req.Model {
++			case "candidate-a":
++				aMessages = req.Messages
++			case "candidate-b":
++				bMessages = req.Messages
++			}
++		}
++		if !reflect.DeepEqual(aMessages, fixture.Messages) || !reflect.DeepEqual(bMessages, fixture.Messages) || !reflect.DeepEqual(aMessages, bMessages) {
++			t.Fatalf("models did not receive identical full chat context for %q: A=%+v B=%+v", fixture.Prompt, aMessages, bMessages)
++		}
++	}
++}
++
++func TestRunEvaluationWithoutJudgeDoesNotInventQualityScores(t *testing.T) {
++	h := newEvalTestHarness(t, false, false)
++	run, err := h.service.RunEvaluation(context.Background(), h.datasetID, "candidate-a", "candidate-b")
++	if err != nil {
++		t.Fatalf("run evaluation: %v", err)
++	}
++	if run.Status != 3 {
++		t.Fatalf("status = %d, want partial (3)", run.Status)
++	}
++	if run.ScoreA != nil || run.ScoreB != nil {
++		t.Fatalf("scores without judge must be null, got %v / %v", run.ScoreA, run.ScoreB)
++	}
++	report := decodeEvalReport(t, run)
++	if report.Summary.ScoredPairs != 0 || report.Summary.JudgeFailures != len(h.fixtures) || report.Summary.ScoringAvailable {
++		t.Fatalf("unexpected no-judge summary: %+v", report.Summary)
++	}
++	for i, sample := range report.Samples {
++		if sample.JudgeError == "" || sample.ScoreA != nil || sample.ScoreB != nil {
++			t.Fatalf("sample %d should have a visible judge error and no score: %+v", i, sample)
++		}
++	}
++}
++
++func TestRunEvaluationPreservesSuccessfulSideWhenOtherSideFails(t *testing.T) {
++	h := newEvalTestHarness(t, true, true)
++	run, err := h.service.RunEvaluation(context.Background(), h.datasetID, "candidate-a", "candidate-b")
++	if err != nil {
++		t.Fatalf("run evaluation: %v", err)
++	}
++	if run.Status != 3 {
++		t.Fatalf("status = %d, want partial (3)", run.Status)
++	}
++	report := decodeEvalReport(t, run)
++	if len(report.Samples) != 2 || report.Summary.FailedB != 1 || report.Summary.SuccessfulA != 2 || report.Summary.SuccessfulB != 1 {
++		t.Fatalf("failure details lost: %+v, samples=%d", report.Summary, len(report.Samples))
++	}
++	failed := report.Samples[0]
++	if failed.OutA == "" || failed.ErrorA != "" || failed.ErrorB == "" || !strings.Contains(failed.ErrorB, "503") {
++		t.Fatalf("successful A output or B failure reason missing: %+v", failed)
++	}
++	if failed.ScoreA != nil || failed.ScoreB != nil {
++		t.Fatalf("unpaired failed sample must not have blind scores: %+v", failed)
++	}
++	if report.Samples[1].ScoreA == nil || report.Samples[1].ScoreB == nil {
++		t.Fatalf("successful paired sample should retain scores: %+v", report.Samples[1])
++	}
++}
++
++func TestSampleFromLogsUsesFullMessagesAndAvoidsTruncatedLegacyPreview(t *testing.T) {
++	h := newEvalTestHarness(t, true, false)
++	longPrompt := strings.Repeat("很长的上下文", 100) + "尾部未截断标记"
++	fullMessages, err := json.Marshal([]evalChatMessage{{Role: "system", Content: "完整系统指令"}, {Role: "user", Content: longPrompt}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	logs := []model.UsageLog{
++		{RequestID: "full", ModelName: "candidate-a", Kind: "chat", Status: 0, PromptPreview: strings.Repeat("x", 500), PromptForEval: string(fullMessages), CreatedAt: time.Now().Add(-48 * time.Hour)},
++		{RequestID: "legacy-short", ModelName: "candidate-a", Kind: "chat", Status: 0, PromptPreview: "较早的完整短提示词", CreatedAt: time.Now().Add(-24 * time.Hour)},
++		{RequestID: "legacy-truncated", ModelName: "candidate-a", Kind: "chat", Status: 0, PromptPreview: strings.Repeat("截", 500), CreatedAt: time.Now()},
++		{RequestID: "failed", ModelName: "candidate-a", Kind: "chat", Status: 500, PromptPreview: "失败请求不应采样"},
++		{RequestID: "non-chat", ModelName: "candidate-a", Kind: "embedding", Status: 0, PromptPreview: "非聊天请求不应采样"},
++	}
++	if err := h.db.Create(&logs).Error; err != nil {
++		t.Fatalf("insert usage logs: %v", err)
++	}
++	added, err := h.service.SampleFromLogs(h.datasetID, 10, "candidate-a")
++	if err != nil {
++		t.Fatalf("sample logs: %v", err)
++	}
++	if added != 2 {
++		t.Fatalf("added = %d, want full + short legacy samples", added)
++	}
++	samples, err := h.service.ListSamples(h.datasetID)
++	if err != nil {
++		t.Fatalf("list samples: %v", err)
++	}
++	serializedSamples, err := json.Marshal(samples)
++	if err != nil {
++		t.Fatalf("marshal eval samples: %v", err)
++	}
++	if strings.Contains(string(serializedSamples), "chat_messages") {
++		t.Fatal("eval sample API model exposed internal full chat messages")
++	}
++	foundFull, foundLegacy := false, false
++	for _, sample := range samples {
++		if sample.Prompt == longPrompt {
++			foundFull = sample.Source == "sampled" && sample.ChatMessages == string(fullMessages)
++		}
++		if sample.Prompt == "较早的完整短提示词" {
++			foundLegacy = sample.Source == "sampled_legacy" && sample.ChatMessages == ""
++		}
++		if strings.Contains(sample.Prompt, "失败请求") || strings.Contains(sample.Prompt, "非聊天请求") || sample.Prompt == strings.Repeat("截", 500) {
++			t.Fatalf("ineligible or truncated log was sampled: %+v", sample)
++		}
++	}
++	if !foundFull || !foundLegacy {
++		t.Fatalf("full/legacy sample classification incorrect: full=%t legacy=%t", foundFull, foundLegacy)
++	}
++	added, err = h.service.SampleFromLogs(h.datasetID, 10, "candidate-a")
++	if err != nil {
++		t.Fatalf("resample logs: %v", err)
++	}
++	if added != 0 {
++		t.Fatalf("duplicate samples were added on second pass: %d", added)
++	}
++}
++
++func TestParsePairScoresRejectsOutOfRangeAndMalformedOutput(t *testing.T) {
++	for _, output := range []string{
++		`{"score_candidate_1":0,"score_candidate_2":8}`,
++		`{"score_candidate_1":11,"score_candidate_2":8}`,
++		`{"score_candidate_1":"bad","score_candidate_2":8}`,
++		`not json`,
++	} {
++		if _, _, ok := parsePairScoresFromJudge(output); ok {
++			t.Errorf("accepted invalid judge result %q", output)
++		}
++	}
++	one, two, ok := parsePairScoresFromJudge(`preface {"score_candidate_1":"8","score_candidate_2":7.5} suffix`)
++	if !ok || one != 8 || two != 7.5 {
++		t.Fatalf("valid scores parsed as %v, %v, %t", one, two, ok)
++	}
++}
++
++func TestMigrationDefinesEvalSamplingFields(t *testing.T) {
++	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "001_init.sql"))
++	if err != nil {
++		t.Fatalf("read migration: %v", err)
++	}
++	for _, field := range []string{"prompt_preview", "prompt_for_eval", "chat_messages"} {
++		if !strings.Contains(string(migration), field) {
++			t.Errorf("production migration missing %q column", field)
++		}
++	}
++	upgrade, err := os.ReadFile(filepath.Join("..", "..", "migrations", "002_eval_prompt_storage.sql"))
++	if err != nil {
++		t.Fatalf("read incremental migration: %v", err)
++	}
++	for _, field := range []string{"prompt_preview", "prompt_for_eval", "chat_messages", "information_schema.columns"} {
++		if !strings.Contains(string(upgrade), field) {
++			t.Errorf("incremental migration missing %q", field)
++		}
++	}
++}
+diff --git a/backend/internal/service/testdata/eval_regression.json b/backend/internal/service/testdata/eval_regression.json
+new file mode 100644
+index 0000000..cb992a9
+--- /dev/null
++++ b/backend/internal/service/testdata/eval_regression.json
+@@ -0,0 +1,23 @@
++[
++  {
++    "name": "算术基准题",
++    "prompt": "回归问题一：2 + 2 等于多少？",
++    "reference": "4",
++    "label": 1,
++    "messages": [
++      {"role": "system", "content": "请用简洁中文回答。"},
++      {"role": "user", "content": "回归问题一：2 + 2 等于多少？"}
++    ]
++  },
++  {
++    "name": "事实核验题",
++    "prompt": "回归问题二：法国的首都是哪里？",
++    "reference": "巴黎",
++    "label": 0,
++    "messages": [
++      {"role": "system", "content": "先核实事实，再给出直接答案。"},
++      {"role": "assistant", "content": "我将回答一个地理常识问题。"},
++      {"role": "user", "content": "回归问题二：法国的首都是哪里？"}
++    ]
++  }
++]
+diff --git a/backend/migrations/001_init.sql b/backend/migrations/001_init.sql
+index c0e0a25..2db66da 100644
+--- a/backend/migrations/001_init.sql
++++ b/backend/migrations/001_init.sql
+@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
+   cached            TINYINT         NOT NULL DEFAULT 0,
+   routed_by         VARCHAR(16)     NOT NULL DEFAULT '' COMMENT 'manual/rule/heuristic/llm',
+   upstream_model    VARCHAR(64)     NOT NULL DEFAULT '',
++  prompt_preview    VARCHAR(500)    NULL COMMENT '普通日志展示用截断预览',
++  prompt_for_eval   TEXT            NULL COMMENT '完整聊天上下文，仅供评测采样，不由普通日志 API 返回',
+   created_at        DATETIME(3)     NOT NULL,
+   PRIMARY KEY (id),
+   UNIQUE KEY uk_request_id (request_id),
+@@ -118,6 +120,7 @@ CREATE TABLE IF NOT EXISTS eval_samples (
+   id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+   dataset_id BIGINT UNSIGNED NOT NULL,
+   prompt     TEXT            NOT NULL,
++  chat_messages TEXT         NULL COMMENT '采样样本的完整 OpenAI 聊天上下文',
+   reference  TEXT            NULL,
+   source     VARCHAR(16)     NOT NULL DEFAULT 'manual' COMMENT 'sampled/manual',
+   label      TINYINT         NULL COMMENT '1 好 0 差 NULL 未标',
+@@ -131,7 +134,7 @@ CREATE TABLE IF NOT EXISTS eval_runs (
+   dataset_id  BIGINT UNSIGNED NOT NULL,
+   model_a     VARCHAR(64)     NOT NULL,
+   model_b     VARCHAR(64)     NOT NULL,
+-  status      TINYINT         NOT NULL DEFAULT 0 COMMENT '0 运行 1 完成 2 失败',
++  status      TINYINT         NOT NULL DEFAULT 0 COMMENT '0 运行 1 完成 2 失败 3 部分完成',
+   score_a     DECIMAL(5, 2)   NULL,
+   score_b     DECIMAL(5, 2)   NULL,
+   cost_a      DECIMAL(12, 6)  NULL,
+diff --git a/backend/migrations/002_eval_prompt_storage.sql b/backend/migrations/002_eval_prompt_storage.sql
+new file mode 100644
+index 0000000..5340915
+--- /dev/null
++++ b/backend/migrations/002_eval_prompt_storage.sql
+@@ -0,0 +1,34 @@
++-- 评测可靠性补充迁移（适用于已使用旧版 001_init.sql 的数据库）。
++-- 通过 information_schema 检查列，兼容旧版应用已由 AutoMigrate 创建 prompt_preview 的环境。
++
++SET @aegis_schema = DATABASE();
++
++SET @aegis_ddl = IF(
++  (SELECT COUNT(*) FROM information_schema.columns
++   WHERE table_schema = @aegis_schema AND table_name = 'usage_logs' AND column_name = 'prompt_preview') = 0,
++  'ALTER TABLE usage_logs ADD COLUMN prompt_preview VARCHAR(500) NULL',
++  'SELECT 1'
++);
++PREPARE aegis_stmt FROM @aegis_ddl;
++EXECUTE aegis_stmt;
++DEALLOCATE PREPARE aegis_stmt;
++
++SET @aegis_ddl = IF(
++  (SELECT COUNT(*) FROM information_schema.columns
++   WHERE table_schema = @aegis_schema AND table_name = 'usage_logs' AND column_name = 'prompt_for_eval') = 0,
++  'ALTER TABLE usage_logs ADD COLUMN prompt_for_eval TEXT NULL',
++  'SELECT 1'
++);
++PREPARE aegis_stmt FROM @aegis_ddl;
++EXECUTE aegis_stmt;
++DEALLOCATE PREPARE aegis_stmt;
++
++SET @aegis_ddl = IF(
++  (SELECT COUNT(*) FROM information_schema.columns
++   WHERE table_schema = @aegis_schema AND table_name = 'eval_samples' AND column_name = 'chat_messages') = 0,
++  'ALTER TABLE eval_samples ADD COLUMN chat_messages TEXT NULL',
++  'SELECT 1'
++);
++PREPARE aegis_stmt FROM @aegis_ddl;
++EXECUTE aegis_stmt;
++DEALLOCATE PREPARE aegis_stmt;
+diff --git "a/docs/05-\346\265\213\350\257\225\346\226\271\346\241\210\344\270\216\345\216\213\346\265\213\346\212\245\345\221\212.md" "b/docs/05-\346\265\213\350\257\225\346\226\271\346\241\210\344\270\216\345\216\213\346\265\213\346\212\245\345\221\212.md"
+index d34c0d8..0389e27 100644
+--- "a/docs/05-\346\265\213\350\257\225\346\226\271\346\241\210\344\270\216\345\216\213\346\265\213\346\212\245\345\221\212.md"
++++ "b/docs/05-\346\265\213\350\257\225\346\226\271\346\241\210\344\270\216\345\216\213\346\265\213\346\212\245\345\221\212.md"
+@@ -9,7 +9,7 @@
+ |---|---|
+ | 环境 | Windows 11 + Go 1.26 + MySQL 9.7.1(Docker :3303) + Redis 7(Docker :6379) |
+ | 网关版本 | v0.1.0-m5（GIN release 模式） |
+-| 单测 | `go test ./... -count=1`：proxy / routing / responsecache / budget 四包共 10 用例 |
++| 单测 | `go test ./... -count=1`：proxy / routing / responsecache / budget 与评测服务固定回归集 |
+ | 静态检查 | `go build ./...` + `go vet ./...` 全绿 |
+ | 前端 | `npm run build` 9 路由构建通过 |
+ 
+@@ -56,6 +56,6 @@
+ 
+ ## 5. 已知限制与后续
+ 
+-- mock 上游为演示用，评测分数为启发式兜底（LLM-as-judge 扩展点已预留，配置 judge 模型即启用）
+-- 脱敏：prompt_preview 目前仅截断未脱敏，企业版需接脱敏组件（PRD R6）
++- 评测质量分由配置的 `judge` 模型对同题匿名 A/B 回答成对评分，并同时参考原问题、参考答案和人工标注；未配置或评分失败时不生成质量分，运行标记为“部分完成”并保留错误明细。
++- 新日志另存完整聊天上下文供评测采样，普通日志 API 仍只展示截断预览；已有历史日志无法还原被截断内容，长度达到 500 字的旧预览不会被采样。完整 prompt 仍可能包含敏感信息，生产环境应在写入评测数据集前接入脱敏组件（PRD R6）。
+ - 监控面板（Prometheus/Grafana）为可选组件，见部署手册
+diff --git "a/docs/06-\351\203\250\347\275\262\344\270\216\350\277\220\347\273\264\346\211\213\345\206\214.md" "b/docs/06-\351\203\250\347\275\262\344\270\216\350\277\220\347\273\264\346\211\213\345\206\214.md"
+index ac44a0e..77cd64c 100644
+--- "a/docs/06-\351\203\250\347\275\262\344\270\216\350\277\220\347\273\264\346\211\213\345\206\214.md"
++++ "b/docs/06-\351\203\250\347\275\262\344\270\216\350\277\220\347\273\264\346\211\213\345\206\214.md"
+@@ -66,6 +66,8 @@ docker compose -f deploy/docker-compose.yml logs -f         # 日志
+ | `UPSTREAM_TIMEOUT_SECONDS` | 180 | 上游调用超时 |
+ | `JWT_EXPIRE_MINUTES` | 720 | 管理端 JWT 有效期 |
+ 
++升级已有数据库时，先备份并执行 `backend/migrations/002_eval_prompt_storage.sql`，再部署新版本；该迁移会补齐历史基线缺失的 `prompt_preview` 及评测采样上下文列。新写入的完整聊天上下文仅用于内部评测采样，不通过普通日志、样本或报告 JSON 返回；生产环境仍应在持久化前接入脱敏。
++
+ ## 4. 监控与可观测
+ 
+ - **调用级可观测**：`usage_logs` 全量落库（request_id 全链路追踪、TTFT、路由方式、缓存标记、错误码）
+@@ -94,7 +96,8 @@ docker exec -i aegis-mysql sh -c 'mysql -uroot -proot aegis' < backup/aegis-2026
+ - [ ] `AUTO_MIGRATE=false` + `SEED_DATA=false`，改走 `migrations/` SQL 迁移
+ - [ ] 网关前加 HTTPS 反向代理（nginx/云 LB），吸收连接队列（Windows backlog 限制见测试报告）
+ - [ ] 确认 `RATE_LIMIT_FAIL_OPEN=false`（默认），LB readiness 使用 `/readyz`
+-- [ ] 配置脱敏组件（prompt_preview 目前仅截断，风险登记册 R6）
++- [ ] 应用数据库增量迁移 `002_eval_prompt_storage.sql`
++- [ ] 配置脱敏组件（普通 `prompt_preview` 截断但未脱敏；内部完整评测上下文也可能含敏感信息，风险登记册 R6）
+ 
+ ## 8. Cloudflare 上线（实测通过）
+ 
+diff --git a/web/app/evals/page.tsx b/web/app/evals/page.tsx
+index ff8e567..2a750e9 100644
+--- a/web/app/evals/page.tsx
++++ b/web/app/evals/page.tsx
+@@ -46,6 +46,7 @@ import TableSkeleton from '@/components/TableSkeleton';
+ import { get, post } from '@/lib/api';
+ import type {
+   EvalDataset,
++  EvalReportSummary,
+   EvalRun,
+   EvalSample,
+   EvalSampleResult,
+@@ -79,6 +80,7 @@ export default function EvalsPage() {
+   const [runOpen, setRunOpen] = useState(false);
+   const [reportRun, setReportRun] = useState<EvalRun | null>(null);
+   const [reportDetail, setReportDetail] = useState<EvalSampleResult[]>([]);
++  const [reportSummary, setReportSummary] = useState<EvalReportSummary | null>(null);
+   const [reportOpen, setReportOpen] = useState(false);
+   const [reportLoading, setReportLoading] = useState(false);
+ 
+@@ -188,12 +190,14 @@ export default function EvalsPage() {
+   const handleRun = async () => {
+     if (selectedId == null) return;
+     const v = await runForm.validateFields();
+-    await post('/evals/runs', {
++    const run = await post<EvalRun>('/evals/runs', {
+       dataset_id: selectedId,
+       model_a: v.model_a,
+       model_b: v.model_b,
+     });
+-    message.success('A/B 回归评测已完成');
++    if (run.status === 1) message.success('A/B 盲测评测已完成');
++    else if (run.status === 3) message.warning('评测部分完成；查看报告中的失败原因');
++    else message.error('评测失败；查看报告中的失败原因');
+     setRunOpen(false);
+     runForm.resetFields();
+     if (selectedId != null) await loadDetail(selectedId);
+@@ -203,16 +207,27 @@ export default function EvalsPage() {
+     setReportRun(run);
+     setReportOpen(true);
+     setReportLoading(true);
++    setReportSummary(null);
++    setReportDetail([]);
+     try {
+       const data = await get<EvalRun>(`/evals/runs/${run.id}/report`);
+       let detail: EvalSampleResult[] = [];
+       if (data.report) {
+         try {
+-          detail = JSON.parse(data.report) as EvalSampleResult[];
++          const parsed = JSON.parse(data.report) as
++            | EvalSampleResult[]
++            | { summary?: EvalReportSummary; samples?: EvalSampleResult[] };
++          if (Array.isArray(parsed)) {
++            detail = parsed;
++          } else {
++            detail = Array.isArray(parsed.samples) ? parsed.samples : [];
++            setReportSummary(parsed.summary ?? null);
++          }
+         } catch {
+           detail = [];
+         }
+       }
++      setReportRun(data);
+       setReportDetail(detail);
+     } catch (e) {
+       message.error(e instanceof Error ? e.message : '报告加载失败');
+@@ -281,7 +296,7 @@ export default function EvalsPage() {
+       key: 'source',
+       width: 90,
+       render: (v: string) =>
+-        v === 'sampled' ? <Tag color="blue">真实采样</Tag> : <Tag>手动</Tag>,
++        v === 'sampled' ? <Tag color="blue">完整采样</Tag> : v === 'sampled_legacy' ? <Tag color="orange">旧日志预览</Tag> : <Tag>手动</Tag>,
+     },
+     {
+       title: '标注',
+@@ -337,7 +352,7 @@ export default function EvalsPage() {
+       key: 'status',
+       width: 90,
+       render: (v: number) =>
+-        v === 1 ? <Tag color="success">完成</Tag> : v === 2 ? <Tag color="error">失败</Tag> : <Tag>运行中</Tag>,
++        v === 1 ? <Tag color="success">完成</Tag> : v === 2 ? <Tag color="error">失败</Tag> : v === 3 ? <Tag color="warning">部分完成</Tag> : <Tag>运行中</Tag>,
+     },
+     {
+       title: '质量分 A/B',
+@@ -363,7 +378,7 @@ export default function EvalsPage() {
+       key: 'action',
+       width: 90,
+       render: (_, r) => (
+-        <Button size="small" onClick={() => void openReport(r)} disabled={r.status !== 1}>
++        <Button size="small" onClick={() => void openReport(r)} disabled={r.status === 0}>
+           查看报告
+         </Button>
+       ),
+@@ -378,7 +393,7 @@ export default function EvalsPage() {
+       dataIndex: 'score_a',
+       key: 'score_a',
+       width: 100,
+-      render: (v: number) => fmtScore(v),
++      render: (v: number | null) => fmtScore(v),
+     },
+     {
+       title: 'A 延迟/成本',
+@@ -391,7 +406,7 @@ export default function EvalsPage() {
+       dataIndex: 'score_b',
+       key: 'score_b',
+       width: 100,
+-      render: (v: number) => fmtScore(v),
++      render: (v: number | null) => fmtScore(v),
+     },
+     {
+       title: 'B 延迟/成本',
+@@ -399,6 +414,19 @@ export default function EvalsPage() {
+       width: 160,
+       render: (_, r) => `${r.latency_b_ms}ms / ¥${r.cost_b.toFixed(6)}`,
+     },
++    {
++      title: '失败原因',
++      key: 'errors',
++      width: 260,
++      render: (_, r) => {
++        const errors = [
++          r.error_a ? `A：${r.error_a}` : '',
++          r.error_b ? `B：${r.error_b}` : '',
++          r.judge_error ? `Judge：${r.judge_error}` : '',
++        ].filter(Boolean);
++        return errors.length ? <Typography.Text type="danger" ellipsis={{ tooltip: errors.join('；') }}>{errors.join('；')}</Typography.Text> : '-';
++      },
++    },
+   ];
+ 
+   return (
+@@ -641,17 +669,26 @@ export default function EvalsPage() {
+       >
+         {reportLoading ? (
+           <Skeleton active paragraph={{ rows: 8 }} />
+-        ) : reportRun && reportRun.status === 1 ? (
++        ) : reportRun && reportRun.status !== 0 ? (
+           <>
++            {reportSummary && (
++              <Alert
++                type={reportRun.status === 1 ? 'success' : 'warning'}
++                showIcon
++                message={`样本 ${reportSummary.total_samples} 条；成对评分 ${reportSummary.scored_pairs} 条；失败 ${reportSummary.failure_count} 项（A ${reportSummary.failed_a}、B ${reportSummary.failed_b}、Judge ${reportSummary.judge_failures}）`}
++                description={`${reportSummary.note ? `${reportSummary.note} ` : ''}模型调用成功数：A ${reportSummary.successful_a}，B ${reportSummary.successful_b}。Judge 成本 ¥${reportSummary.judge_cost.toFixed(6)}，不计入模型 A/B 成本。`}
++                style={{ marginBottom: 16 }}
++              />
++            )}
+             <Row gutter={16} style={{ marginBottom: 16 }}>
+               <Col span={6}>
+                 <Card size="small">
+-                  <Statistic title={`${reportRun.model_a} 质量分`} value={reportRun.score_a ?? 0} precision={1} />
++                  <Statistic title={`${reportRun.model_a} 质量分`} value={reportRun.score_a ?? undefined} precision={1} />
+                 </Card>
+               </Col>
+               <Col span={6}>
+                 <Card size="small">
+-                  <Statistic title={`${reportRun.model_b} 质量分`} value={reportRun.score_b ?? 0} precision={1} />
++                  <Statistic title={`${reportRun.model_b} 质量分`} value={reportRun.score_b ?? undefined} precision={1} />
+                 </Card>
+               </Col>
+               <Col span={6}>
+@@ -698,13 +735,22 @@ export default function EvalsPage() {
+                       <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                         {r.out_a_preview || '-'}
+                       </Typography.Paragraph>
++                      {r.error_a && <Alert type="error" showIcon message={`模型 A 失败：${r.error_a}`} />}
+                     </Col>
+                     <Col span={12}>
+                       <Typography.Text type="secondary">模型 B 输出：</Typography.Text>
+                       <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
+                         {r.out_b_preview || '-'}
+                       </Typography.Paragraph>
++                      {r.error_b && <Alert type="error" showIcon message={`模型 B 失败：${r.error_b}`} />}
+                     </Col>
++                    {(r.reference || r.label != null || r.judge_error) && (
++                      <Col span={24}>
++                        {r.reference && <Typography.Paragraph><Typography.Text strong>参考答案：</Typography.Text>{r.reference}</Typography.Paragraph>}
++                        {r.label != null && <Typography.Paragraph><Typography.Text strong>人工标注：</Typography.Text>{r.label === 1 ? '好' : '差'}</Typography.Paragraph>}
++                        {r.judge_error && <Alert type="warning" showIcon message={`Judge 评分失败：${r.judge_error}`} />}
++                      </Col>
++                    )}
+                   </Row>
+                 ),
+               }}
+diff --git a/web/lib/types.ts b/web/lib/types.ts
+index f385a5b..d6b819b 100644
+--- a/web/lib/types.ts
++++ b/web/lib/types.ts
+@@ -166,7 +166,7 @@ export interface EvalSample {
+   dataset_id: number;
+   prompt: string;
+   reference: string;
+-  source: string; // sampled / manual
++  source: string; // sampled / sampled_legacy / manual
+   label: number | null; // 1 好 / 0 差 / null 未标
+   created_at: string;
+ }
+@@ -177,14 +177,14 @@ export interface EvalRun {
+   dataset_id: number;
+   model_a: string;
+   model_b: string;
+-  status: number; // 0 运行中 1 完成 2 失败
++  status: number; // 0 运行中 1 完成 2 失败 3 部分完成
+   score_a: number | null;
+   score_b: number | null;
+   cost_a: number | null;
+   cost_b: number | null;
+   latency_a: number | null;
+   latency_b: number | null;
+-  report: string | null; // JSON 字符串（EvalSampleResult[]）
++  report: string | null; // JSON 字符串（包含 summary 与 samples）
+   created_at: string;
+   finished_at: string | null;
+ }
+@@ -192,13 +192,33 @@ export interface EvalRun {
+ /** 评测单样本结果（与后端 EvalSampleResult 对齐） */
+ export interface EvalSampleResult {
+   index: number;
++  sample_id: number;
+   prompt: string;
+-  score_a: number;
++  reference?: string;
++  label?: number;
++  score_a: number | null;
+   latency_a_ms: number;
+   cost_a: number;
+   out_a_preview: string;
+-  score_b: number;
++  error_a?: string;
++  score_b: number | null;
+   latency_b_ms: number;
+   cost_b: number;
+   out_b_preview: string;
++  error_b?: string;
++  judge_error?: string;
++}
++
++export interface EvalReportSummary {
++  total_samples: number;
++  scored_pairs: number;
++  successful_a: number;
++  successful_b: number;
++  failed_a: number;
++  failed_b: number;
++  judge_failures: number;
++  failure_count: number;
++  scoring_available: boolean;
++  judge_cost: number;
++  note?: string;
+ }
+-- 
+2.43.0
+
