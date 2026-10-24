@@ -46,6 +46,7 @@ import TableSkeleton from '@/components/TableSkeleton';
 import { get, post } from '@/lib/api';
 import type {
   EvalDataset,
+  EvalReportSummary,
   EvalRun,
   EvalSample,
   EvalSampleResult,
@@ -79,6 +80,7 @@ export default function EvalsPage() {
   const [runOpen, setRunOpen] = useState(false);
   const [reportRun, setReportRun] = useState<EvalRun | null>(null);
   const [reportDetail, setReportDetail] = useState<EvalSampleResult[]>([]);
+  const [reportSummary, setReportSummary] = useState<EvalReportSummary | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
 
@@ -188,12 +190,14 @@ export default function EvalsPage() {
   const handleRun = async () => {
     if (selectedId == null) return;
     const v = await runForm.validateFields();
-    await post('/evals/runs', {
+    const run = await post<EvalRun>('/evals/runs', {
       dataset_id: selectedId,
       model_a: v.model_a,
       model_b: v.model_b,
     });
-    message.success('A/B 回归评测已完成');
+    if (run.status === 1) message.success('A/B 盲测评测已完成');
+    else if (run.status === 3) message.warning('评测部分完成；查看报告中的失败原因');
+    else message.error('评测失败；查看报告中的失败原因');
     setRunOpen(false);
     runForm.resetFields();
     if (selectedId != null) await loadDetail(selectedId);
@@ -203,16 +207,27 @@ export default function EvalsPage() {
     setReportRun(run);
     setReportOpen(true);
     setReportLoading(true);
+    setReportSummary(null);
+    setReportDetail([]);
     try {
       const data = await get<EvalRun>(`/evals/runs/${run.id}/report`);
       let detail: EvalSampleResult[] = [];
       if (data.report) {
         try {
-          detail = JSON.parse(data.report) as EvalSampleResult[];
+          const parsed = JSON.parse(data.report) as
+            | EvalSampleResult[]
+            | { summary?: EvalReportSummary; samples?: EvalSampleResult[] };
+          if (Array.isArray(parsed)) {
+            detail = parsed;
+          } else {
+            detail = Array.isArray(parsed.samples) ? parsed.samples : [];
+            setReportSummary(parsed.summary ?? null);
+          }
         } catch {
           detail = [];
         }
       }
+      setReportRun(data);
       setReportDetail(detail);
     } catch (e) {
       message.error(e instanceof Error ? e.message : '报告加载失败');
@@ -281,7 +296,7 @@ export default function EvalsPage() {
       key: 'source',
       width: 90,
       render: (v: string) =>
-        v === 'sampled' ? <Tag color="blue">真实采样</Tag> : <Tag>手动</Tag>,
+        v === 'sampled' ? <Tag color="blue">完整采样</Tag> : v === 'sampled_legacy' ? <Tag color="orange">旧日志预览</Tag> : <Tag>手动</Tag>,
     },
     {
       title: '标注',
@@ -337,7 +352,7 @@ export default function EvalsPage() {
       key: 'status',
       width: 90,
       render: (v: number) =>
-        v === 1 ? <Tag color="success">完成</Tag> : v === 2 ? <Tag color="error">失败</Tag> : <Tag>运行中</Tag>,
+        v === 1 ? <Tag color="success">完成</Tag> : v === 2 ? <Tag color="error">失败</Tag> : v === 3 ? <Tag color="warning">部分完成</Tag> : <Tag>运行中</Tag>,
     },
     {
       title: '质量分 A/B',
@@ -363,7 +378,7 @@ export default function EvalsPage() {
       key: 'action',
       width: 90,
       render: (_, r) => (
-        <Button size="small" onClick={() => void openReport(r)} disabled={r.status !== 1}>
+        <Button size="small" onClick={() => void openReport(r)} disabled={r.status === 0}>
           查看报告
         </Button>
       ),
@@ -378,7 +393,7 @@ export default function EvalsPage() {
       dataIndex: 'score_a',
       key: 'score_a',
       width: 100,
-      render: (v: number) => fmtScore(v),
+      render: (v: number | null) => fmtScore(v),
     },
     {
       title: 'A 延迟/成本',
@@ -391,13 +406,26 @@ export default function EvalsPage() {
       dataIndex: 'score_b',
       key: 'score_b',
       width: 100,
-      render: (v: number) => fmtScore(v),
+      render: (v: number | null) => fmtScore(v),
     },
     {
       title: 'B 延迟/成本',
       key: 'b_meta',
       width: 160,
       render: (_, r) => `${r.latency_b_ms}ms / ¥${r.cost_b.toFixed(6)}`,
+    },
+    {
+      title: '失败原因',
+      key: 'errors',
+      width: 260,
+      render: (_, r) => {
+        const errors = [
+          r.error_a ? `A：${r.error_a}` : '',
+          r.error_b ? `B：${r.error_b}` : '',
+          r.judge_error ? `Judge：${r.judge_error}` : '',
+        ].filter(Boolean);
+        return errors.length ? <Typography.Text type="danger" ellipsis={{ tooltip: errors.join('；') }}>{errors.join('；')}</Typography.Text> : '-';
+      },
     },
   ];
 
@@ -641,17 +669,26 @@ export default function EvalsPage() {
       >
         {reportLoading ? (
           <Skeleton active paragraph={{ rows: 8 }} />
-        ) : reportRun && reportRun.status === 1 ? (
+        ) : reportRun && reportRun.status !== 0 ? (
           <>
+            {reportSummary && (
+              <Alert
+                type={reportRun.status === 1 ? 'success' : 'warning'}
+                showIcon
+                message={`样本 ${reportSummary.total_samples} 条；成对评分 ${reportSummary.scored_pairs} 条；失败 ${reportSummary.failure_count} 项（A ${reportSummary.failed_a}、B ${reportSummary.failed_b}、Judge ${reportSummary.judge_failures}）`}
+                description={`${reportSummary.note ? `${reportSummary.note} ` : ''}模型调用成功数：A ${reportSummary.successful_a}，B ${reportSummary.successful_b}。Judge 成本 ¥${reportSummary.judge_cost.toFixed(6)}，不计入模型 A/B 成本。`}
+                style={{ marginBottom: 16 }}
+              />
+            )}
             <Row gutter={16} style={{ marginBottom: 16 }}>
               <Col span={6}>
                 <Card size="small">
-                  <Statistic title={`${reportRun.model_a} 质量分`} value={reportRun.score_a ?? 0} precision={1} />
+                  <Statistic title={`${reportRun.model_a} 质量分`} value={reportRun.score_a ?? undefined} precision={1} />
                 </Card>
               </Col>
               <Col span={6}>
                 <Card size="small">
-                  <Statistic title={`${reportRun.model_b} 质量分`} value={reportRun.score_b ?? 0} precision={1} />
+                  <Statistic title={`${reportRun.model_b} 质量分`} value={reportRun.score_b ?? undefined} precision={1} />
                 </Card>
               </Col>
               <Col span={6}>
@@ -698,13 +735,22 @@ export default function EvalsPage() {
                       <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
                         {r.out_a_preview || '-'}
                       </Typography.Paragraph>
+                      {r.error_a && <Alert type="error" showIcon message={`模型 A 失败：${r.error_a}`} />}
                     </Col>
                     <Col span={12}>
                       <Typography.Text type="secondary">模型 B 输出：</Typography.Text>
                       <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
                         {r.out_b_preview || '-'}
                       </Typography.Paragraph>
+                      {r.error_b && <Alert type="error" showIcon message={`模型 B 失败：${r.error_b}`} />}
                     </Col>
+                    {(r.reference || r.label != null || r.judge_error) && (
+                      <Col span={24}>
+                        {r.reference && <Typography.Paragraph><Typography.Text strong>参考答案：</Typography.Text>{r.reference}</Typography.Paragraph>}
+                        {r.label != null && <Typography.Paragraph><Typography.Text strong>人工标注：</Typography.Text>{r.label === 1 ? '好' : '差'}</Typography.Paragraph>}
+                        {r.judge_error && <Alert type="warning" showIcon message={`Judge 评分失败：${r.judge_error}`} />}
+                      </Col>
+                    )}
                   </Row>
                 ),
               }}

@@ -166,7 +166,7 @@ export interface EvalSample {
   dataset_id: number;
   prompt: string;
   reference: string;
-  source: string; // sampled / manual
+  source: string; // sampled / sampled_legacy / manual
   label: number | null; // 1 好 / 0 差 / null 未标
   created_at: string;
 }
@@ -177,14 +177,14 @@ export interface EvalRun {
   dataset_id: number;
   model_a: string;
   model_b: string;
-  status: number; // 0 运行中 1 完成 2 失败
+  status: number; // 0 运行中 1 完成 2 失败 3 部分完成
   score_a: number | null;
   score_b: number | null;
   cost_a: number | null;
   cost_b: number | null;
   latency_a: number | null;
   latency_b: number | null;
-  report: string | null; // JSON 字符串（EvalSampleResult[]）
+  report: string | null; // JSON 字符串（包含 summary 与 samples）
   created_at: string;
   finished_at: string | null;
 }
@@ -192,13 +192,33 @@ export interface EvalRun {
 /** 评测单样本结果（与后端 EvalSampleResult 对齐） */
 export interface EvalSampleResult {
   index: number;
+  sample_id: number;
   prompt: string;
-  score_a: number;
+  reference?: string;
+  label?: number;
+  score_a: number | null;
   latency_a_ms: number;
   cost_a: number;
   out_a_preview: string;
-  score_b: number;
+  error_a?: string;
+  score_b: number | null;
   latency_b_ms: number;
   cost_b: number;
   out_b_preview: string;
+  error_b?: string;
+  judge_error?: string;
+}
+
+export interface EvalReportSummary {
+  total_samples: number;
+  scored_pairs: number;
+  successful_a: number;
+  successful_b: number;
+  failed_a: number;
+  failed_b: number;
+  judge_failures: number;
+  failure_count: number;
+  scoring_available: boolean;
+  judge_cost: number;
+  note?: string;
 }

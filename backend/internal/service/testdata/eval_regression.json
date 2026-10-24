@@ -1,0 +1,23 @@
+[
+  {
+    "name": "算术基准题",
+    "prompt": "回归问题一：2 + 2 等于多少？",
+    "reference": "4",
+    "label": 1,
+    "messages": [
+      {"role": "system", "content": "请用简洁中文回答。"},
+      {"role": "user", "content": "回归问题一：2 + 2 等于多少？"}
+    ]
+  },
+  {
+    "name": "事实核验题",
+    "prompt": "回归问题二：法国的首都是哪里？",
+    "reference": "巴黎",
+    "label": 0,
+    "messages": [
+      {"role": "system", "content": "先核实事实，再给出直接答案。"},
+      {"role": "assistant", "content": "我将回答一个地理常识问题。"},
+      {"role": "user", "content": "回归问题二：法国的首都是哪里？"}
+    ]
+  }
+]

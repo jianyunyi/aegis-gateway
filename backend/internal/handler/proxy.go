@@ -27,12 +27,14 @@ import (
 // ---- OpenAI 协议请求结构（仅解析代理所需字段，其余透传）----
 
 type openaiChatReq struct {
-	Model    string `json:"model"`
-	Stream   bool   `json:"stream"`
-	Messages []struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	} `json:"messages"`
+	Model    string        `json:"model"`
+	Stream   bool          `json:"stream"`
+	Messages []chatMessage `json:"messages"`
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // promptText 拼接消息内容供启发式路由使用（截断避免过大）。
@@ -48,13 +50,22 @@ func (r openaiChatReq) promptText() string {
 	return t
 }
 
-// promptPreview 截断为 500 字（评测采样用；企业版此处应接脱敏）。
+// promptPreview 截断为 500 字，供普通日志展示。
 func (r openaiChatReq) promptPreview() string {
 	t := r.promptText()
 	if len([]rune(t)) > 500 {
 		t = string([]rune(t)[:500])
 	}
 	return t
+}
+
+// promptForEval 保留成功聊天请求的完整 role/content 序列，仅供评测采样使用。
+func (r openaiChatReq) promptForEval() string {
+	encoded, err := json.Marshal(r.Messages)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 // ---- 辅助 ----
@@ -185,6 +196,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 				log.RoutedBy = dec.RoutedBy
 				log.UpstreamModel = dec.Requested
 				log.PromptPreview = req.promptPreview()
+				log.PromptForEval = req.promptForEval()
 				persistUsage(d.Repo, apiKey, log)
 				c.Data(http.StatusOK, "application/json", []byte(cachedBody))
 				return
@@ -257,7 +269,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		}
 
 		if req.Stream {
-			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body, req.promptPreview())
+			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body, req.promptPreview(), req.promptForEval())
 			return
 		}
 
@@ -277,6 +289,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		log.RoutedBy = dec.RoutedBy
 		log.UpstreamModel = dec.Requested
 		log.PromptPreview = req.promptPreview()
+		log.PromptForEval = req.promptForEval()
 		persistUsage(d.Repo, apiKey, log)
 
 		// 计费：预算累计（仅对设置了月度预算的 Key 生效）
@@ -300,7 +313,7 @@ func chatCacheKey(modelName string, body []byte) string {
 }
 
 // streamChatForward SSE 逐块转发上游响应，统计 TTFT 与 usage。
-func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader, preview string) {
+func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader, preview, promptForEval string) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -369,6 +382,9 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 	log.RoutedBy = dec.RoutedBy
 	log.UpstreamModel = dec.Requested
 	log.PromptPreview = truncateRunes(preview, 500)
+	if status == 0 {
+		log.PromptForEval = promptForEval
+	}
 	persistUsage(d.Repo, apiKey, log)
 
 	if log.Cost > 0 && apiKey.BudgetMonthly > 0 {
