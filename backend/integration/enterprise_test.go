@@ -39,9 +39,10 @@ type faultGate struct {
 // Stall quota projection only, so the second instance must commit its ledger
 // while the first instance is waiting for Redis.
 type quotaStallHook struct {
-	entered      chan struct{}
-	release      chan struct{}
-	rateFailures atomic.Int32
+	entered       chan struct{}
+	release       chan struct{}
+	projectionKey string
+	rateFailures  atomic.Int32
 }
 
 func (h *quotaStallHook) DialHook(next redis.DialHook) redis.DialHook { return next }
@@ -51,12 +52,9 @@ func (h *quotaStallHook) ProcessPipelineHook(next redis.ProcessPipelineHook) red
 func (h *quotaStallHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		if cmd.Name() == "set" || cmd.Name() == "eval" || cmd.Name() == "evalsha" {
-			for _, arg := range cmd.Args() {
-				if key, ok := arg.(string); ok && strings.HasPrefix(key, "rl:{") {
-					h.rateFailures.Add(1)
-					return fmt.Errorf("injected Redis rate-limit failure")
-				}
-				if key, ok := arg.(string); ok && strings.HasPrefix(key, "quota:") {
+			args := cmd.Args()
+			if (cmd.Name() == "eval" || cmd.Name() == "evalsha") && len(args) >= 4 {
+				if fmt.Sprint(args[2]) == "1" && fmt.Sprint(args[3]) == h.projectionKey {
 					h.entered <- struct{}{}
 					select {
 					case <-h.release:
@@ -66,6 +64,12 @@ func (h *quotaStallHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 					}
 				}
 			}
+			for _, arg := range cmd.Args() {
+				if key, ok := arg.(string); ok && strings.HasPrefix(key, "rl:{") {
+					h.rateFailures.Add(1)
+					return fmt.Errorf("injected Redis rate-limit failure")
+				}
+			}
 		}
 		return next(ctx, cmd)
 	}
@@ -73,7 +77,11 @@ func (h *quotaStallHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 
 func TestTwoInstancesFailOpenUsageProjection(t *testing.T) {
 	f := setup(t, true)
-	h := &quotaStallHook{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	h := &quotaStallHook{
+		entered:       make(chan struct{}, 8),
+		release:       make(chan struct{}),
+		projectionKey: fmt.Sprintf("quota:%d", f.key.ID),
+	}
 	for _, repo := range f.repos {
 		repo.Redis.AddHook(h)
 	}

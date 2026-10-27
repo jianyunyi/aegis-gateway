@@ -116,36 +116,60 @@ func (l *budgetLease) Release() {
 	}
 }
 
-func (l *budgetLease) Commit(actualCost float64) {
+func (l *budgetLease) CommitUsage(actualCost float64, persist func() error) error {
 	if l == nil || l.released || l.keep {
-		return
+		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	if err := l.budget.SettleForMonth(ctx, l.keyID, l.monthKey, l.requestID, actualCost); err != nil {
+	if err := l.budget.CommitUsageForMonth(ctx, l.keyID, l.monthKey, l.requestID, actualCost, persist); err != nil {
 		l.keep = true
 		slog.Error("budget settlement failed", "request_id", l.requestID, "api_key_id", l.keyID, "error", err)
-		return
+		return err
 	}
 	l.released = true
+	return nil
 }
 
 // settleUsage commits the durable ledger first; failed ledger writes keep both
 // Redis reservations until bounded expiry instead of admitting more traffic.
 func settleUsage(repo *repository.Repository, key *model.ApiKey, log *model.UsageLog, quota *quotaLease, monthly *budgetLease) {
-	if err := persistUsage(repo, key, log); err != nil {
+	persist := func() error { return persistUsage(repo, key, log) }
+	if monthly != nil {
+		attempted, persisted := false, false
+		err := monthly.CommitUsage(log.Cost, func() error {
+			attempted = true
+			err := persist()
+			persisted = err == nil
+			return err
+		})
+		if err != nil && !attempted {
+			// Preserve the durable ledger even when Redis cannot grant the lock.
+			// Keep the monthly reservation until expiry to remain conservative.
+			persisted = persist() == nil
+			monthly.retainUntilExpiry()
+		}
+		if !persisted {
+			if quota != nil {
+				quota.retainUntilExpiry()
+			}
+			monthly.retainUntilExpiry()
+			return
+		}
+		if quota != nil {
+			quota.Release()
+		}
+		return
+	}
+	if err := persist(); err != nil {
 		if quota != nil {
 			quota.retainUntilExpiry()
-		}
-		if monthly != nil {
-			monthly.retainUntilExpiry()
 		}
 		return
 	}
 	if quota != nil {
 		quota.Release()
 	}
-	monthly.Commit(log.Cost)
 }
 
 func estimateTokens(kind string, body []byte) int64 {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,6 +94,110 @@ func TestMonthlyBudgetReservationsIncludeConcurrentRequests(t *testing.T) {
 		t.Fatalf("in-flight reservation oversold budget: allowed=%v err=%v", overLimit, err)
 	}
 	if err := b.ReleaseForMonth(ctx, keyID, monthKey, "at-limit"); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := b.ReserveForMonth(ctx, keyID, monthKey, "abandoned", 2, 0.25, 25*time.Millisecond)
+	if err != nil || !expired {
+		t.Fatalf("short reservation allowed=%v err=%v", expired, err)
+	}
+	live, err := b.ReserveForMonth(ctx, keyID, monthKey, "live", 2, 0.5, time.Minute)
+	if err != nil || !live {
+		t.Fatalf("live reservation allowed=%v err=%v", live, err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	reclaimed, err := b.ReserveForMonth(ctx, keyID, monthKey, "after-expiry", 2, 0.25, time.Minute)
+	if err != nil || !reclaimed {
+		t.Fatalf("expired budget reservation was not reclaimed: allowed=%v err=%v", reclaimed, err)
+	}
+	reserved, err := client.Get(ctx, "budget:reserved:"+strings.TrimPrefix(monthKey, "budget:")).Int64()
+	if err != nil || reserved != 750_000 {
+		t.Fatalf("reserved after expiry=%d error=%v", reserved, err)
+	}
+	if err := b.ReleaseForMonth(ctx, keyID, monthKey, "after-expiry"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.ReleaseForMonth(ctx, keyID, monthKey, "live"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMonthlyBudgetCommitAndReservationDoNotDoubleCount(t *testing.T) {
+	addr := os.Getenv("TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Fatal("TEST_REDIS_ADDR required")
+	}
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.UsageLog{}); err != nil {
+		t.Fatal(err)
+	}
+	keyID := uint64(time.Now().UnixNano())
+	monthKey := MonthKey(keyID)
+	if err := db.Create(&model.UsageLog{RequestID: fmt.Sprintf("base-%d", keyID), APIKeyID: keyID, ModelName: "m", Kind: "chat", Cost: 1, CreatedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	b := New(client, db)
+	firstID := fmt.Sprintf("first-%d", keyID)
+	allowed, err := b.ReserveForMonth(ctx, keyID, monthKey, firstID, 2, 0.25, time.Minute)
+	if err != nil || !allowed {
+		t.Fatalf("first reservation allowed=%v err=%v", allowed, err)
+	}
+	inserted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- b.CommitUsageForMonth(ctx, keyID, monthKey, firstID, 0.25, func() error {
+			if err := db.Create(&model.UsageLog{RequestID: firstID, APIKeyID: keyID, ModelName: "m", Kind: "chat", Cost: 0.25, CreatedAt: time.Now()}).Error; err != nil {
+				return err
+			}
+			close(inserted)
+			<-releaseCommit
+			return nil
+		})
+	}()
+	<-inserted
+	type reserveResult struct {
+		allowed bool
+		err     error
+	}
+	reserveDone := make(chan reserveResult, 1)
+	go func() {
+		ok, err := b.ReserveForMonth(ctx, keyID, monthKey, "second", 2, 0.75, time.Minute)
+		reserveDone <- reserveResult{allowed: ok, err: err}
+	}()
+	select {
+	case result := <-reserveDone:
+		close(releaseCommit)
+		<-commitDone
+		t.Fatalf("reservation was not serialized with settlement: allowed=%v err=%v", result.allowed, result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseCommit)
+	if err := <-commitDone; err != nil {
+		t.Fatal(err)
+	}
+	result := <-reserveDone
+	if result.err != nil || !result.allowed {
+		t.Fatalf("request at remaining budget was rejected: allowed=%v err=%v", result.allowed, result.err)
+	}
+	used, err := client.Get(ctx, monthKey).Int64()
+	if err != nil || used != 1_250_000 {
+		t.Fatalf("committed projection=%d error=%v", used, err)
+	}
+	reserved, err := client.Get(ctx, "budget:reserved:"+strings.TrimPrefix(monthKey, "budget:")).Int64()
+	if err != nil || reserved != 750_000 {
+		t.Fatalf("in-flight reservation=%d error=%v", reserved, err)
+	}
+	if err := b.ReleaseForMonth(ctx, keyID, monthKey, "second"); err != nil {
 		t.Fatal(err)
 	}
 }

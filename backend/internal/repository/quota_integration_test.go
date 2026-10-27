@@ -77,4 +77,29 @@ func TestAtomicQuotaReservationsDoNotOversell(t *testing.T) {
 	if err := repo.ReleaseQuota(ctx, keyID, id); err != nil {
 		t.Fatal(err)
 	}
+
+	expiredID := "abandoned"
+	expired, err := repo.ReserveQuota(ctx, keyID, expiredID, 0, 1, 1, 25*time.Millisecond)
+	if err != nil || !expired {
+		t.Fatalf("short reservation allowed=%v err=%v", expired, err)
+	}
+	live, err := repo.ReserveQuota(ctx, keyID, "live", 0, 2, 1, time.Minute)
+	if err != nil || !live {
+		t.Fatalf("live reservation allowed=%v err=%v", live, err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	reclaimed, err := repo.ReserveQuota(ctx, keyID, "after-expiry", 0, 2, 1, time.Minute)
+	if err != nil || !reclaimed {
+		t.Fatalf("expired reservation was not reclaimed: allowed=%v err=%v", reclaimed, err)
+	}
+	reserved, err := client.Get(ctx, fmt.Sprintf("quota:reserved:%d", keyID)).Int64()
+	if err != nil || reserved != 2 {
+		t.Fatalf("reserved after expiry=%d error=%v", reserved, err)
+	}
+	if err := repo.ReleaseQuota(ctx, keyID, "live"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReleaseQuota(ctx, keyID, "after-expiry"); err != nil {
+		t.Fatal(err)
+	}
 }
