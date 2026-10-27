@@ -2,7 +2,11 @@
 .PHONY: dev build build-linux test vet tidy fmt up down logs ps migrate
 
 dev:        ## 本地运行网关（需先启动 mysql/redis）
-	cd backend && go run ./cmd/gateway
+	cd backend && if [ -f ../.env ]; then set -a; . ../.env; set +a; fi; \
+	if [ -z "$${MYSQL_DSN:-}" ] && [ -n "$${MYSQL_PASSWORD:-}" ]; then \
+	  MYSQL_DSN="$${MYSQL_USER:-aegis}:$${MYSQL_PASSWORD}@tcp(127.0.0.1:3303)/aegis?charset=utf8mb4&parseTime=True&loc=Local"; export MYSQL_DSN; \
+	fi; \
+	APP_ENV=dev AUTO_MIGRATE=true REDIS_ADDR="$${REDIS_ADDR:-127.0.0.1:6380}" go run ./cmd/gateway
 
 build:      ## 编译网关二进制（Windows）
 	cd backend && go build -o bin/gateway.exe ./cmd/gateway
@@ -36,4 +40,8 @@ ps:         ## 查看服务状态
 	docker compose -f deploy/docker-compose.yml ps
 
 migrate:    ## 仅执行数据库迁移
-	cd backend && go run ./cmd/gateway -migrate-only
+	cd backend && if [ -f ../.env ]; then set -a; . ../.env; set +a; fi; \
+	if [ -z "$${MYSQL_DSN:-}" ] && [ -n "$${MYSQL_PASSWORD:-}" ]; then \
+	  MYSQL_DSN="$${MYSQL_USER:-aegis}:$${MYSQL_PASSWORD}@tcp(127.0.0.1:3303)/aegis?charset=utf8mb4&parseTime=True&loc=Local"; export MYSQL_DSN; \
+	fi; \
+	APP_ENV=prod AUTO_MIGRATE=false go run ./cmd/gateway -migrate-only

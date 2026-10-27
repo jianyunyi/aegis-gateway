@@ -17,7 +17,8 @@ import { chromium } from '../.cache/screenshot/node_modules/playwright/index.mjs
 
 const BASE = process.env.AEGIS_URL || 'http://localhost:3000';
 const USER = process.env.AEGIS_USER || 'admin';
-const PASS = process.env.AEGIS_PASSWORD || 'admin123';
+const PASS = process.env.AEGIS_PASSWORD;
+if (!PASS) throw new Error('Set AEGIS_PASSWORD to the locally generated bootstrap password.');
 // fileURLToPath 会正确解码 %20 等转义（pathname 不会）
 const OUT = fileURLToPath(new URL('../docs/images/', import.meta.url));
 

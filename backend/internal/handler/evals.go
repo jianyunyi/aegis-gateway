@@ -79,6 +79,10 @@ func AddEvalSample(d *Deps) gin.HandlerFunc {
 // SampleEval 从真实调用日志采样入数据集。
 func SampleEval(d *Deps) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if d.Cfg == nil || !d.Cfg.CapturePrompts {
+			c.JSON(http.StatusForbidden, gin.H{"code": 40301, "message": "调用日志采样已关闭；需显式启用 PROMPT_CAPTURE_ENABLED", "data": nil})
+			return
+		}
 		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "id 无效", "data": nil})

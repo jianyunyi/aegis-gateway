@@ -146,7 +146,7 @@ func newEvalTestHarness(t *testing.T, withJudge, failSecondB bool) *evalTestHarn
 		}
 	}
 	h.datasetID = dataset.ID
-	h.service = NewEvalService(repo, providers, models, proxy.NewUpstreamClient(3*time.Second))
+	h.service = NewEvalService(repo, providers, models, proxy.NewUpstreamClient(3*time.Second), true)
 	return h
 }
 

@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
-[![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org/)
 [![CI](https://github.com/jianyunyi/aegis-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/jianyunyi/aegis-gateway/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)](https://docs.docker.com/compose/)
 
@@ -26,27 +26,35 @@
 ## 快速开始
 
 ```bash
-# 1. 一键启动全栈（MySQL + Redis + 网关 + mock 沙箱 + 管理后台）
-#    前置：make build-linux（交叉编译，或由 CI 完成）
+# 1. 首次运行时生成本地随机密钥与一次性管理员密码（只运行一次）
+./scripts/init-compose-env.sh
+
+# 2. 构建 Go 二进制，再启动 MySQL + Redis + SQL 迁移 + 网关 + mock + 管理后台
+make build-linux
 docker compose -f deploy/docker-compose.yml up -d --build
 
-# 2. 健康检查
+# 3. 健康检查
 curl http://localhost:8081/healthz
 curl http://localhost:8081/readyz  # LB readiness：检查 MySQL + Redis
 
-# 3. 打开管理后台（浏览器直连 8081 网关 API，CORS 已放行）
-open http://localhost:3000        # 默认账号 admin / admin123
+# 4. 打开管理后台；用户名 admin，密码由初始化脚本显示一次
+open http://localhost:3000
 ```
 
-> 端口约定：网关 `8081`（容器内 8080）、后台 `3000`、MySQL `3303`、Redis `6379`、mock 沙箱 `8099`。
+> 所有宿主机端口只绑定 `127.0.0.1`：网关 `8081`、后台 `3000`、MySQL `3303`、Redis `6380`、mock 沙箱 `8099`。对公网提供服务前，必须在受信任的 HTTPS 反向代理后发布；不要直接暴露 Compose 的 HTTP 端口。
 > web 镜像构建需要网络（npm ci，走 npmmirror）；无网络时用 `npm run dev` 本地起后台。
 
 本地开发（不经 Docker）：
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d mysql redis   # 只起依赖
-cd backend && go run ./cmd/gateway                                # 起网关
-cd web && npm install && npm run dev                              # 起后台
+./scripts/init-compose-env.sh                                    # 若尚未生成 .env
+docker compose -f deploy/docker-compose.yml up -d mysql redis    # 只起依赖
+set -a && . ./.env && set +a
+export APP_ENV=dev AUTO_MIGRATE=true
+export MYSQL_DSN="${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(127.0.0.1:3303)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+export REDIS_ADDR=127.0.0.1:6380
+(cd backend && go run ./cmd/gateway)                                # 起网关
+(cd web && npm install && npm run dev)                              # 起后台
 ```
 
 Windows 无 make 时的命令对照：`make up` → `docker compose -f deploy/docker-compose.yml up -d --build`；`make test` → `cd backend; go test ./... -race`。
@@ -57,11 +65,11 @@ Windows 无 make 时的命令对照：`make up` → `docker compose -f deploy/do
 |---|---|
 | 统一接入 | OpenAI 兼容协议，任意官方 SDK 改 `base_url` 即接入；SSE 流式逐块转发，记录 TTFT 首字延迟 |
 | 安全鉴权 | API Key 哈希存储（明文仅创建时展示一次）；提供商 Key AES-256-GCM 加密；JWT 管理端登录 |
-| 限流防滥用 | Redis Lua 令牌桶，每 Key 可配 rps/burst |
-| 计费对账 | 按 token 计价 + 调用日志；Redis 计数与 MySQL 流水定时对账（以 MySQL 为准） |
+| 限流防滥用 | Redis Lua 令牌桶；管理员登录限流；请求体大小上限；API Key 配额原子预留 |
+| 计费对账 | chat/completions、completions、embeddings 统一解析 usage、计价、写流水；Redis 计数与 MySQL 流水定时对账 |
 | 可观测 | 大盘（请求量/成本/Token/成功率/延迟）、7/30 天趋势、日志分页查询、每日账单 |
 | 成本优化 | 语义路由（Header > Key 默认模型 > 启发式选档）；请求缓存（含路由模型复合键）；月度预算自动降级 + 告警 |
-| 评测飞轮 | 真实调用采样 → 人工打标 → A/B 模型回归（质量分 + 成本 + 延迟报告与选型结论） |
+| 隐私与评测 | prompt 采集默认关闭；可选脱敏采样、请求级退出和保留期清理；人工样本仍可用于 A/B 评测 |
 | 管理后台 | Next.js + AntD：登录 / 大盘 / Key / 提供商 / 模型 / 日志 / 账单 / 评测 |
 
 ## 界面预览
@@ -82,7 +90,7 @@ Windows 无 make 时的命令对照：`make up` → `docker compose -f deploy/do
 业务方 (OpenAI SDK / curl) ──Bearer ak_xxx──► AEGIS Gateway (Go/Gin)
    中间件链: KeyAuth → RateLimit → 语义路由 → 请求缓存 → 预算降级 → 流式代理
         │                                      │
-   Redis(限流/缓存/配额/预算)            MySQL(Key/模型/调用日志/账单/评测)
+   Redis(限流/缓存/配额与预算预留)       MySQL(Key/模型/用量流水/账单/评测；月预算权威来源)
         │
    上游: OpenAI / DeepSeek / 通义 / Ollama / mock 沙箱（统一 OpenAI 兼容协议）
 ```

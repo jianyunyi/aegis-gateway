@@ -17,7 +17,7 @@ import (
 
 // New 构建完整路由。
 func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
-	if cfg.Env == "prod" {
+	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -31,18 +31,22 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 		Models:    service.NewModelService(repo),
 		Stats:     service.NewStatsService(repo),
 		Billing:   service.NewBillingService(repo),
-		Eval:      service.NewEvalService(repo, service.NewProviderService(repo, cfg.JWTSecret), service.NewModelService(repo), proxy.NewUpstreamClient(cfg.UpstreamTimeout)),
+		Eval:      service.NewEvalService(repo, service.NewProviderService(repo, cfg.JWTSecret), service.NewModelService(repo), proxy.NewUpstreamClient(cfg.UpstreamTimeout), cfg.CapturePrompts),
 		Router:    routing.NewRouter(repo),
 		Cache:     responsecache.New(repo.Redis, cfg.CacheTTL),
-		Budget:    budget.New(repo.Redis),
+		Budget:    budget.New(repo.Redis, repo.DB),
 		Upstream:  proxy.NewUpstreamClient(cfg.UpstreamTimeout),
 	}
 
 	r := gin.New()
+	if err := r.SetTrustedProxies(nil); err != nil {
+		panic(err)
+	}
 	r.Use(gin.Recovery())
-	r.Use(middleware.CORS())
+	r.Use(middleware.CORS(cfg.CORSAllowedOrigins))
 	r.Use(middleware.RequestID())
 	r.Use(middleware.AccessLog())
+	r.Use(middleware.BodyLimit(cfg.MaxRequestBodyBytes))
 
 	// 健康检查
 	r.GET("/healthz", handler.Health)
@@ -61,7 +65,7 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 	// 管理侧：REST + JWT
 	admin := r.Group("/api/v1/admin")
 	{
-		admin.POST("/auth/login", handler.AdminLogin(d))
+		admin.POST("/auth/login", middleware.LoginRateLimit(repo, cfg.RateLimitTimeout), handler.AdminLogin(d))
 
 		authed := admin.Group("")
 		authed.Use(middleware.JWTAuth(cfg.JWTSecret))

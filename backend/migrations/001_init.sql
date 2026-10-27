@@ -1,9 +1,6 @@
 -- AEGIS 初始表结构（MySQL 8）
--- 说明：演示环境由 gateway 的 AutoMigrate 自动建表（backend/internal/model 为单一事实来源）；
--- 本文件作为生产环境 DDL 基线，二者保持一致。
-
-CREATE DATABASE IF NOT EXISTS aegis DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE aegis;
+-- 本文件由版本化迁移器执行；目标数据库必须已在 MYSQL_DSN 中选择。
+-- 新安装基线应与 backend/internal/model 中的 GORM 模型保持一致。
 
 CREATE TABLE IF NOT EXISTS users (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -25,6 +22,9 @@ CREATE TABLE IF NOT EXISTS api_keys (
   user_id      BIGINT UNSIGNED NOT NULL,
   status       TINYINT         NOT NULL DEFAULT 1 COMMENT '1 启用 0 禁用',
   quota_tokens BIGINT          NOT NULL DEFAULT 0 COMMENT '0=不限',
+  used_tokens  BIGINT          NOT NULL DEFAULT 0,
+  default_model VARCHAR(64)    NOT NULL DEFAULT '',
+  budget_monthly DECIMAL(12,4) NOT NULL DEFAULT 0,
   rps_limit    INT             NOT NULL DEFAULT 10,
   burst        INT             NOT NULL DEFAULT 20,
   expires_at   DATETIME(3)     NULL,
@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   prompt_tokens     INT             NOT NULL DEFAULT 0,
   completion_tokens INT             NOT NULL DEFAULT 0,
   total_tokens      INT             NOT NULL DEFAULT 0,
+  usage_estimated   TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '1=用网关估算的 usage',
   cost              DECIMAL(12, 6)  NOT NULL DEFAULT 0,
   latency_ms        INT             NOT NULL DEFAULT 0,
   ttft_ms           INT             NULL,
@@ -83,7 +84,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   cached            TINYINT         NOT NULL DEFAULT 0,
   routed_by         VARCHAR(16)     NOT NULL DEFAULT '' COMMENT 'manual/rule/heuristic/llm',
   upstream_model    VARCHAR(64)     NOT NULL DEFAULT '',
-  prompt_preview    VARCHAR(500)    NULL COMMENT '普通日志展示用截断预览',
+  prompt_preview    VARCHAR(500)    NULL COMMENT '仅显式开启采集后存储的脱敏预览',
   prompt_for_eval   TEXT            NULL COMMENT '完整聊天上下文，仅供评测采样，不由普通日志 API 返回',
   created_at        DATETIME(3)     NOT NULL,
   PRIMARY KEY (id),

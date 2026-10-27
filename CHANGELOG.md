@@ -2,6 +2,16 @@
 
 项目版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased] — Security hardening
+
+- 移除生产 JWT fallback、默认管理员和启动时演示 API Key；种子数据/管理员创建须显式启用并提供独立凭据。
+- 真实对话采集默认关闭；显式开启时规则脱敏后才存储，支持单请求退出与按保留期清理。
+- `make migrate`/Compose `migrate` 执行具备版本记录的 SQL migrations；补齐 API Key 账务列。
+- chat、completions、embeddings 统一做 usage 计价/流水；token 配额与月度成本均使用 Redis Lua 原子预留，依赖故障关闭；预算每次以 MySQL 当月流水为准并在账单提交后结算实际成本。
+- 上游不返回 usage 时按请求和响应内容估算 token 并标记 `usage_estimated`，避免 completions/embeddings 或流式请求静默记零。
+- 为请求体设上限、管理员登录加 IP 限流、request ID 改由网关随机生成；Compose 使用认证 Redis、专用 MySQL 账号，端口只绑定 loopback。
+- 升级 Next.js、Axios、ECharts 及相关生产依赖；`npm audit --omit=dev` 通过。
+
 ## [v0.1.0] - 2026-08-17
 
 首个开源版本：企业大模型网关 M1-M5 全部里程碑完成。

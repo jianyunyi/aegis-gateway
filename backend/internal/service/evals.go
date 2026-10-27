@@ -12,21 +12,24 @@ import (
 	"time"
 
 	"aegis-gateway/internal/model"
+	"aegis-gateway/internal/privacy"
 	"aegis-gateway/internal/proxy"
 	"aegis-gateway/internal/repository"
 )
 
 // EvalService 评测飞轮：真实调用采样 → 人工标注 → 同题盲测回归。
 type EvalService struct {
-	repo      *repository.Repository
-	providers *ProviderService
-	models    *ModelService
-	upstream  *proxy.UpstreamClient
+	repo           *repository.Repository
+	providers      *ProviderService
+	models         *ModelService
+	upstream       *proxy.UpstreamClient
+	capturePrompts bool
 }
 
 // NewEvalService 构造 EvalService。
-func NewEvalService(repo *repository.Repository, providers *ProviderService, models *ModelService, upstream *proxy.UpstreamClient) *EvalService {
-	return &EvalService{repo: repo, providers: providers, models: models, upstream: upstream}
+func NewEvalService(repo *repository.Repository, providers *ProviderService, models *ModelService, upstream *proxy.UpstreamClient, capturePrompts ...bool) *EvalService {
+	enabled := len(capturePrompts) > 0 && capturePrompts[0]
+	return &EvalService{repo: repo, providers: providers, models: models, upstream: upstream, capturePrompts: enabled}
 }
 
 // ---- 数据集 ----
@@ -70,6 +73,9 @@ func (s *EvalService) LabelSample(sampleID uint64, label int8) error {
 // SampleFromLogs 从全时间范围的真实调用日志中随机采样，优先使用完整聊天消息。
 // 旧记录只有 preview：恰好达到 500 字的记录可能已被截断，因此不导入数据集。
 func (s *EvalService) SampleFromLogs(datasetID uint64, count int, modelName string) (int, error) {
+	if !s.capturePrompts {
+		return 0, errors.New("prompt capture is disabled")
+	}
 	if count <= 0 || count > 100 {
 		count = 10
 	}
@@ -109,12 +115,16 @@ func (s *EvalService) SampleFromLogs(datasetID uint64, count int, modelName stri
 		prompt := ""
 		source := "sampled"
 		if messages != "" {
+			messages, err = privacy.RedactMessages(messages)
+			if err != nil {
+				continue
+			}
 			prompt = lastUserMessage(messages)
 			if prompt == "" {
 				continue
 			}
 		} else {
-			prompt = strings.TrimSpace(log.PromptPreview)
+			prompt = strings.TrimSpace(privacy.Redact(log.PromptPreview))
 			if prompt == "" || len([]rune(prompt)) >= 500 {
 				continue
 			}

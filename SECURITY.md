@@ -18,8 +18,10 @@
 |---|---|
 | API Key 存储 | 仅存 SHA-256 哈希 + 展示前缀，明文只在创建时返回一次（ADR-007） |
 | 提供商 Key | AES-256-GCM 加密落库，代理调用时才解密 |
-| 日志 | 不记录 Key 明文；prompt_preview 仅截断（企业版需接脱敏） |
-| 默认凭证 | 种子管理员 `admin/admin123` 仅用于演示，生产必须修改 `JWT_SECRET` 并禁用种子 |
+| 日志与隐私 | prompt 采集默认关闭；显式启用后先做常见凭据/直接标识符规则脱敏，并支持请求级退出与保留期清理 |
+| 初始化凭证 | 不含公开 JWT fallback、`admin/admin123` 或演示 API Key；首个管理员仅通过显式引导凭据创建 |
+| 防滥用 | 管理员登录按客户端 IP 限流；请求体有大小上限；Redis 配额预留原子执行且依赖故障时拒绝请求 |
+| 部署 | Compose 使用专用 MySQL 用户、认证 Redis，宿主端口只绑定 loopback；公网发布必须通过 HTTPS 反向代理 |
 
 ## 支持版本
 
@@ -30,8 +32,9 @@
 
 ## 生产部署检查清单
 
-- [ ] 修改 `JWT_SECRET`（`JWT_SECRET` 环境变量）
-- [ ] 修改默认管理员密码
-- [ ] 设置 `AUTO_MIGRATE=false`，改用 `migrations/` SQL 迁移
-- [ ] 配置限流 fail-closed（如需）
-- [ ] 启用 HTTPS 反向代理
+- [ ] 为 MySQL root、应用账号、Redis 和 `JWT_SECRET` 设置独立随机秘密
+- [ ] 首个管理员通过显式引导账号/密码创建，不启用公开默认值
+- [ ] 保持 `AUTO_MIGRATE=false`，按版本执行 SQL migrations
+- [ ] 保持 Redis 认证和限流 fail-closed
+- [ ] 默认关闭 prompt 采集；确需开启时审批下游传输、设保留期并验证脱敏策略
+- [ ] 限定精确 CORS 来源、设置请求体上限，并经 HTTPS 反向代理发布

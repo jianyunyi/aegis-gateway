@@ -16,6 +16,7 @@ import (
 	"aegis-gateway/internal/repository"
 	"aegis-gateway/internal/router"
 	"aegis-gateway/internal/service"
+	"aegis-gateway/migrations"
 )
 
 func main() {
@@ -23,9 +24,36 @@ func main() {
 	flag.Parse()
 
 	cfg := config.Load()
+	var validationErr error
+	if *migrateOnly {
+		validationErr = cfg.ValidateMigration()
+	} else {
+		validationErr = cfg.Validate()
+	}
+	if validationErr != nil {
+		slog.Error("unsafe or incomplete configuration", "error", validationErr)
+		os.Exit(1)
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+
+	if *migrateOnly {
+		repo, err := repository.NewMySQL(cfg)
+		if err != nil {
+			slog.Error("init MySQL for migration failed", "error", err)
+			os.Exit(1)
+		}
+		defer repo.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := migrations.Apply(ctx, repo.DB); err != nil {
+			slog.Error("SQL migration failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("SQL migrations applied")
+		return
+	}
 
 	repo, err := repository.New(cfg)
 	if err != nil {
@@ -34,30 +62,28 @@ func main() {
 	}
 	defer repo.Close()
 
-	if cfg.AutoMigrate || *migrateOnly {
+	if cfg.AutoMigrate {
 		if err := repo.AutoMigrate(); err != nil {
-			slog.Error("auto migrate failed", "error", err)
+			slog.Error("development auto migrate failed", "error", err)
 			os.Exit(1)
-		}
-		slog.Info("database migrated")
-		if *migrateOnly {
-			return
 		}
 	}
 
-	// 演示数据（幂等）：默认管理员、DeepSeek 提供商、模型目录、示例 Key
+	// 可选演示目录；首个管理员必须通过显式引导凭据创建，绝不生成示例 API Key。
 	if cfg.SeedData {
-		seedKey, err := service.Seed(repo)
-		if err != nil {
+		if err := service.Seed(repo, cfg.BootstrapAdminUser, cfg.BootstrapAdminPass); err != nil {
 			slog.Error("seed failed", "error", err)
 			os.Exit(1)
 		}
-		if seedKey != "" {
-			slog.Info("seeded demo api key (show once)", "key", seedKey)
-		} else {
-			slog.Info("seed data already exists, skip")
-		}
+		slog.Info("optional seed data initialized")
 	}
+	retentionCtx, retentionCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if removed, err := service.CleanupExpiredPromptData(retentionCtx, repo, cfg.PromptRetentionDays); err != nil {
+		slog.Error("prompt retention cleanup failed")
+	} else if removed > 0 {
+		slog.Info("prompt retention cleanup completed", "removed_records", removed)
+	}
+	retentionCancel()
 
 	r := router.New(cfg, repo)
 
@@ -65,11 +91,14 @@ func main() {
 	billingCtx, billingCancel := context.WithCancel(context.Background())
 	defer billingCancel()
 	service.NewBillingService(repo).StartTicker(billingCtx, cfg.BillingInterval)
+	service.StartPromptRetention(billingCtx, repo, cfg.PromptRetentionDays)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {

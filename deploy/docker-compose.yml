@@ -1,63 +1,96 @@
+x-gateway-env: &gateway-env
+  APP_ENV: prod
+  GIN_MODE: release
+  HTTP_ADDR: ":8080"
+  MYSQL_DSN: "${MYSQL_USER:-aegis}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@tcp(mysql:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+  REDIS_ADDR: "redis:6379"
+  REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"
+  JWT_SECRET: "${JWT_SECRET:?set a random JWT_SECRET of at least 32 bytes in .env}"
+  AUTO_MIGRATE: "false"
+  SEED_DATA: "${SEED_DATA:-false}"
+  BOOTSTRAP_ADMIN_USERNAME: "${BOOTSTRAP_ADMIN_USERNAME:-}"
+  BOOTSTRAP_ADMIN_PASSWORD: "${BOOTSTRAP_ADMIN_PASSWORD:-}"
+  PROMPT_CAPTURE_ENABLED: "${PROMPT_CAPTURE_ENABLED:-false}"
+  PROMPT_RETENTION_DAYS: "${PROMPT_RETENTION_DAYS:-30}"
+  MAX_REQUEST_BODY_BYTES: "${MAX_REQUEST_BODY_BYTES:-2097152}"
+  RATE_LIMIT_FAIL_OPEN: "false"
+  CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"
+
+x-migration-env: &migration-env
+  APP_ENV: prod
+  MYSQL_DSN: "${MYSQL_USER:-aegis}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@tcp(mysql:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+  AUTO_MIGRATE: "false"
+
 services:
   mysql:
-    # 本地 F 盘 Docker 数据已有镜像；生产环境建议固定 LTS 版本 mysql:8.0
-    image: mysql:latest
+    image: mysql:8.0
     container_name: aegis-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}"
       MYSQL_DATABASE: aegis
+      MYSQL_USER: "${MYSQL_USER:-aegis}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}"
     ports:
-      # 宿主机 3303 → 容器 3306（本机 3306 已被其他 MySQL 占用，故避开）
-      - "3303:3306"
+      - "127.0.0.1:3303:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\""]
       interval: 5s
       timeout: 3s
       retries: 20
 
   redis:
-    # 本地 F 盘已有 redis:7（Debian 版）；-alpine 变体可按需拉取
     image: redis:7
     container_name: aegis-redis
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
     ports:
-      # 宿主机 6380 → 容器 6379（本机 6379 被其他项目容器占用，故避开）
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   mockupstream:
-    # 演示沙箱上游（OpenAI 兼容 mock），无需真实 API Key
+    # Optional local OpenAI-compatible sandbox; host access is loopback-only.
     build:
       context: ..
       dockerfile: deploy/Dockerfile.mockupstream
     container_name: aegis-mockupstream
     ports:
-      - "8099:8099"
+      - "127.0.0.1:8099:8099"
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    container_name: aegis-migrate
+    command: ["-migrate-only"]
+    environment: *migration-env
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
 
   gateway:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
     container_name: aegis-gateway
-    environment:
-      APP_ENV: prod
-      GIN_MODE: release
-      HTTP_ADDR: ":8080"
-      MYSQL_DSN: "root:root@tcp(mysql:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
-      REDIS_ADDR: "redis:6379"
-      # 密钥从项目根 .env 注入（.env 不入库）；未设置时用本地开发默认值
-      JWT_SECRET: "${JWT_SECRET:-dev-secret-change-me}"
-      SEED_DATA: "${SEED_DATA:-false}"
+    environment: *gateway-env
     ports:
-      # 宿主机 8081 → 容器 8080（本机 8080 已被其他服务占用，故避开）
-      - "8081:8080"
+      # Publish only to localhost; terminate HTTPS at a trusted reverse proxy.
+      - "127.0.0.1:8081:8080"
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
-        condition: service_started
+        condition: service_healthy
       mockupstream:
         condition: service_started
 
@@ -66,12 +99,11 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.web
       args:
-        # 本地 Docker：浏览器走同源 /api，由 Next 重写到网关（aegis-gateway:8080）
         NEXT_PUBLIC_API_BASE: /api/v1/admin
         NEXT_PUBLIC_API_PROXY: "http://aegis-gateway:8080/api/:path*"
     container_name: aegis-web
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - gateway
 

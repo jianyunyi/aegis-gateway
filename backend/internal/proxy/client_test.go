@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -84,5 +85,53 @@ func TestIsSSEDone(t *testing.T) {
 		if got := IsSSEDone(tc.line); got != tc.want {
 			t.Errorf("%q: got %t want %t", tc.line, got, tc.want)
 		}
+	}
+}
+
+func TestParseUsageFromCompletionsAndEmbeddings(t *testing.T) {
+	for _, raw := range []string{
+		`{"object":"text_completion","choices":[{"text":"answer"}],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}`,
+		`{"object":"list","data":[{"embedding":[]}],"usage":{"prompt_tokens":12,"total_tokens":12}}`,
+	} {
+		prompt, completion := ParseUsageFromBody([]byte(raw))
+		if prompt != 12 {
+			t.Fatalf("prompt usage=%d, want 12: %s", prompt, raw)
+		}
+		if strings.Contains(raw, "text_completion") && completion != 7 {
+			t.Fatalf("completion usage=%d, want 7", completion)
+		}
+	}
+	if prompt, completion := ParseUsageFromBody([]byte(`{"choices":[]}`)); prompt != 0 || completion != 0 {
+		t.Fatalf("missing usage must remain distinguishable, got %d/%d", prompt, completion)
+	}
+}
+
+func TestUsagePresenceAndSSECharacterEstimate(t *testing.T) {
+	if HasUsageInBody([]byte(`{"usage":{"prompt_tokens":0}}`)) != true {
+		t.Fatal("explicit zero usage must still be marked as reported")
+	}
+	if HasUsageInBody([]byte(`{"choices":[]}`)) {
+		t.Fatal("missing usage must be distinguishable")
+	}
+	line := `data: {"choices":[{"delta":{"content":"hello"}}]}`
+	if got := ContentDeltaTokenEstimate(line); got != 2 {
+		t.Fatalf("SSE content token estimate=%d, want 2", got)
+	}
+	if got := ContentDeltaTokenEstimate(": heartbeat"); got != 0 {
+		t.Fatalf("heartbeat token estimate=%d, want 0", got)
+	}
+	if got := EstimateTextTokens("你好"); got != 4 {
+		t.Fatalf("CJK token estimate=%d, want 4", got)
+	}
+}
+
+func TestRewriteModelPreservesRequestFields(t *testing.T) {
+	input := []byte(`{"model":"client-model","stream":true,"max_tokens":10}`)
+	var got map[string]any
+	if err := json.Unmarshal(RewriteModel(input, "routed-model"), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["model"] != "routed-model" || got["stream"] != true || got["max_tokens"] != float64(10) {
+		t.Fatalf("rewritten request lost fields: %+v", got)
 	}
 }
