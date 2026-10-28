@@ -14,6 +14,7 @@ type UsageLog struct {
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
 	TotalTokens      int       `json:"total_tokens"`
+	UsageEstimated   bool      `gorm:"not null;default:false" json:"usage_estimated"`
 	Cost             float64   `gorm:"type:decimal(12,6);not null;default:0" json:"cost"` // 元
 	LatencyMs        int       `json:"latency_ms"`
 	TTFTMs           *int      `json:"ttft_ms"`                          // 流式首字延迟
@@ -22,8 +23,8 @@ type UsageLog struct {
 	Cached           int8      `gorm:"not null;default:0" json:"cached"`
 	RoutedBy         string    `gorm:"size:16" json:"routed_by"` // manual / rule / heuristic / llm
 	UpstreamModel    string    `gorm:"size:64" json:"upstream_model"`
-	PromptPreview    string    `gorm:"size:500" json:"prompt_preview"` // 截断的 prompt（评测采样用；企业版需脱敏）
-	PromptForEval    string    `gorm:"type:text" json:"-"`             // 完整聊天上下文，仅供评测采样；不随普通日志 API 返回
+	PromptPreview    string    `gorm:"size:500" json:"prompt_preview"` // 仅显式开启采集后存脱敏预览
+	PromptForEval    string    `gorm:"type:text" json:"-"`             // 仅显式开启采集后存脱敏上下文，保留期清理
 	CreatedAt        time.Time `gorm:"index:idx_key_time,priority:2;index:idx_model_time,priority:2" json:"created_at"`
 }
 

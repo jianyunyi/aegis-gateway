@@ -12,11 +12,11 @@
   "dependencies": {
     "@ant-design/icons": "^5.3.7",
     "antd": "^5.19.0",
-    "axios": "^1.7.2",
+    "axios": "^1.21.0",
     "dayjs": "^1.11.11",
-    "echarts": "^5.5.0",
+    "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.2",
-    "next": "^14.2.4",
+    "next": "^15.5.28",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -25,7 +25,7 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "eslint": "^8.57.0",
-    "eslint-config-next": "^14.2.4",
+    "eslint-config-next": "^15.5.28",
     "typescript": "^5.4.5"
   },
   "browserslist": [
@@ -34,5 +34,10 @@
     "firefox >= 88",
     "safari >= 14",
     "ios_saf >= 14"
-  ]
+  ],
+  "overrides": {
+    "follow-redirects": "1.16.2",
+    "postcss": "8.5.32",
+    "source-map-js": "1.2.2"
+  }
 }

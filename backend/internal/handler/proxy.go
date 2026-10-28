@@ -18,6 +18,7 @@ import (
 
 	"aegis-gateway/internal/middleware"
 	"aegis-gateway/internal/model"
+	"aegis-gateway/internal/privacy"
 	"aegis-gateway/internal/proxy"
 	"aegis-gateway/internal/repository"
 	"aegis-gateway/internal/responsecache"
@@ -52,7 +53,7 @@ func (r openaiChatReq) promptText() string {
 
 // promptPreview 截断为 500 字，供普通日志展示。
 func (r openaiChatReq) promptPreview() string {
-	t := r.promptText()
+	t := privacy.Redact(r.promptText())
 	if len([]rune(t)) > 500 {
 		t = string([]rune(t)[:500])
 	}
@@ -65,7 +66,15 @@ func (r openaiChatReq) promptForEval() string {
 	if err != nil {
 		return ""
 	}
-	return string(encoded)
+	redacted, err := privacy.RedactMessages(string(encoded))
+	if err != nil {
+		return ""
+	}
+	return redacted
+}
+
+func promptCaptureEnabled(c *gin.Context, d *Deps) bool {
+	return d.Cfg != nil && d.Cfg.CapturePrompts && !strings.EqualFold(c.GetHeader("X-AEGIS-No-Prompt-Capture"), "true")
 }
 
 // ---- 辅助 ----
@@ -96,7 +105,7 @@ func costOf(m *model.Model, prompt, completion int) float64 {
 }
 
 // persistUsage 落库调用日志 + Redis 配额计数 + MySQL used_tokens 更新。
-func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.UsageLog) {
+func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.UsageLog) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var committedTokens int64
@@ -116,7 +125,7 @@ func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.Usa
 	})
 	if err != nil {
 		slog.Error("write usage log failed", "request_id", log.RequestID, "error", err)
-		return
+		return err
 	}
 	// Best-effort projection runs after COMMIT, without holding an API-key lock.
 	// A separate deadline keeps Redis failure independent of ledger persistence.
@@ -125,9 +134,12 @@ func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.Usa
 		defer projectionCancel()
 		if err := repo.ProjectQuota(projectionCtx, key.ID, committedTokens); err != nil {
 			slog.Error("quota projection failed", "request_id", log.RequestID, "error", err)
+			// Releasing the reservation while the fast counter is stale would
+			// allow a later request to pass the quota.
+			return err
 		}
 	}
-
+	return nil
 }
 
 // ---- 代理端点 ----
@@ -139,10 +151,16 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		apiKey := c.MustGet(middleware.CtxAPIKey).(*model.ApiKey)
 		requestID := c.GetString(middleware.RequestIDKey)
 		start := time.Now()
+		capturePrompt := promptCaptureEnabled(c, d)
 
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			abortOpenAI(c, http.StatusBadRequest, "无法读取请求体")
+			return
+		}
+		body, err = proxy.EnforceOutputCap(body)
+		if err != nil {
+			abortOpenAI(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		var req openaiChatReq
@@ -165,42 +183,84 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 			return
 		}
 
-		// 2) 预算预检：月度预算超限 → 降级到最便宜模型并告警
-		if apiKey.BudgetMonthly > 0 {
-			exceeded, spent, err := d.Budget.Exceeded(c, apiKey.ID, apiKey.BudgetMonthly)
-			if err == nil && exceeded {
-				if cheap, changed := d.Router.DowngradeToCheapest(c, dec.Model); changed {
-					slog.Warn("monthly budget exceeded, downgrading model",
-						"api_key_id", apiKey.ID, "spent", spent, "budget", apiKey.BudgetMonthly,
-						"from", dec.Model.Name, "to", cheap.Name)
-					dec.Model = cheap
-					dec.RoutedBy = "budget"
-					dec.Downgraded = true
-				}
-			}
-		}
 		target := dec.Model
+		if (apiKey.QuotaTokens > 0 || apiKey.BudgetMonthly > 0) && validateConstrainedInput("chat/completions", body) != nil {
+			abortOpenAI(c, http.StatusBadRequest, "配额或预算受限请求不支持多模态输入")
+			return
+		}
+		lease, quotaStatus := reserveQuota(c, d, apiKey, requestID, estimateTokens("chat/completions", body))
+		if quotaStatus != 0 {
+			if quotaStatus == http.StatusTooManyRequests {
+				log := newUsageLog(apiKey, target, requestID, start)
+				log.ErrorCode = "quota_exceeded"
+				log.Status = http.StatusTooManyRequests
+				log.LatencyMs = int(time.Since(start).Milliseconds())
+				settleUsage(d.Repo, apiKey, log, nil, nil)
+				abortOpenAI(c, http.StatusTooManyRequests, "配额不足")
+			} else {
+				abortOpenAI(c, http.StatusServiceUnavailable, "配额服务暂不可用")
+			}
+			return
+		}
+		if lease != nil {
+			defer lease.Release()
+		}
 
 		// 3) 请求缓存（仅非流式；key 含实际路由模型，避免跨模型错配缓存）
 		if !req.Stream {
 			cacheKey := chatCacheKey(target.Name, body)
 			if cachedBody, hit := d.Cache.Get(c, cacheKey); hit {
 				prompt, completion := proxy.ParseUsageFromBody([]byte(cachedBody))
+				usageEstimated := !proxy.HasUsageInBody([]byte(cachedBody))
+				if usageEstimated {
+					prompt, completion = estimateUsage("chat/completions", body, []byte(cachedBody))
+				}
 				log := newUsageLog(apiKey, target, requestID, start)
 				log.PromptTokens = prompt
 				log.CompletionTokens = completion
 				log.TotalTokens = prompt + completion
+				log.UsageEstimated = usageEstimated
 				log.Cost = 0 // 缓存命中不产生上游费用
 				log.LatencyMs = int(time.Since(start).Milliseconds())
 				log.Cached = 1
 				log.RoutedBy = dec.RoutedBy
 				log.UpstreamModel = dec.Requested
-				log.PromptPreview = req.promptPreview()
-				log.PromptForEval = req.promptForEval()
-				persistUsage(d.Repo, apiKey, log)
+				if capturePrompt {
+					log.PromptPreview = req.promptPreview()
+					log.PromptForEval = req.promptForEval()
+				}
+				settleUsage(d.Repo, apiKey, log, lease, nil)
 				c.Data(http.StatusOK, "application/json", []byte(cachedBody))
 				return
 			}
+		}
+		monthly, budgetStatus := reserveBudget(c, d, apiKey, target, "chat/completions", body, requestID)
+		if budgetStatus == http.StatusTooManyRequests {
+			if cheap, changed := d.Router.DowngradeToCheapest(c, target); changed {
+				previous := target
+				target = cheap
+				dec.Model = cheap
+				dec.RoutedBy = "budget"
+				dec.Downgraded = true
+				slog.Warn("monthly budget reservation required a cheaper model", "api_key_id", apiKey.ID, "from", previous.Name, "to", cheap.Name)
+				monthly, budgetStatus = reserveBudget(c, d, apiKey, target, "chat/completions", body, requestID)
+			}
+		}
+		if budgetStatus != 0 {
+			if budgetStatus == http.StatusTooManyRequests {
+				log := newUsageLog(apiKey, target, requestID, start)
+				log.ErrorCode = "budget_exceeded"
+				log.Status = http.StatusTooManyRequests
+				log.LatencyMs = int(time.Since(start).Milliseconds())
+				settleUsage(d.Repo, apiKey, log, lease, nil)
+				abortOpenAI(c, http.StatusTooManyRequests, "月度预算已用尽")
+			} else {
+				abortOpenAI(c, http.StatusServiceUnavailable, "预算服务暂不可用")
+			}
+			return
+		}
+		if monthly != nil {
+			defer monthly.Release()
 		}
 
 		// 4) 提供商解析（按路由后的模型）
@@ -219,24 +279,10 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 			return
 		}
 
-		// 配额预检（Redis 计数；与 MySQL 的对账在 M3 实现）
-		if apiKey.QuotaTokens > 0 {
-			used, _ := d.Repo.Redis.Get(c, "quota:"+strconv.FormatUint(apiKey.ID, 10)).Int64()
-			if used >= apiKey.QuotaTokens {
-				log := newUsageLog(apiKey, target, requestID, start)
-				log.ErrorCode = "quota_exceeded"
-				log.Status = http.StatusTooManyRequests
-				log.LatencyMs = int(time.Since(start).Milliseconds())
-				persistUsage(d.Repo, apiKey, log)
-				abortOpenAI(c, http.StatusTooManyRequests, "配额不足")
-				return
-			}
-		}
-
 		// 流式请求注入 include_usage（支撑计费）
-		forwardBody := body
+		forwardBody := proxy.RewriteModel(body, target.Name)
 		if req.Stream {
-			forwardBody = proxy.EnsureStreamUsage(body)
+			forwardBody = proxy.EnsureStreamUsage(forwardBody)
 		}
 		upURL := proxy.ResolveURL(p.BaseURL, "/chat/completions")
 		upReq, err := proxy.NewRequest(c.Request.Context(), http.MethodPost, upURL, upstreamKey, forwardBody)
@@ -251,7 +297,7 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 			log.ErrorCode = "upstream_error"
 			log.Status = http.StatusBadGateway
 			log.LatencyMs = int(time.Since(start).Milliseconds())
-			persistUsage(d.Repo, apiKey, log)
+			settleUsage(d.Repo, apiKey, log, lease, monthly)
 			abortOpenAI(c, http.StatusBadGateway, "上游调用失败: "+err.Error())
 			return
 		}
@@ -263,39 +309,51 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 			log.ErrorCode = "upstream_http_" + strconv.Itoa(resp.StatusCode)
 			log.Status = int16(resp.StatusCode)
 			log.LatencyMs = int(time.Since(start).Milliseconds())
-			persistUsage(d.Repo, apiKey, log)
+			settleUsage(d.Repo, apiKey, log, lease, monthly)
 			c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), raw)
 			return
 		}
 
 		if req.Stream {
-			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body, req.promptPreview(), req.promptForEval())
+			preview, fullMessages := "", ""
+			if capturePrompt {
+				preview, fullMessages = req.promptPreview(), req.promptForEval()
+			}
+			streamChatForward(d, c, apiKey, target, dec, requestID, start, resp.Body, body, preview, fullMessages, lease, monthly)
 			return
 		}
 
 		// 非流式：透传 JSON 并解析 usage；成功后写缓存
 		raw, err := io.ReadAll(resp.Body)
 		if err != nil {
+			log := newUsageLog(apiKey, target, requestID, start)
+			log.ErrorCode = "upstream_response_read_error"
+			log.Status = http.StatusBadGateway
+			log.LatencyMs = int(time.Since(start).Milliseconds())
+			settleUsage(d.Repo, apiKey, log, lease, monthly)
 			abortOpenAI(c, http.StatusBadGateway, "读取上游响应失败")
 			return
 		}
 		prompt, completion := proxy.ParseUsageFromBody(raw)
+		usageEstimated := !proxy.HasUsageInBody(raw)
+		if usageEstimated {
+			prompt, completion = estimateUsage("chat/completions", body, raw)
+		}
 		log := newUsageLog(apiKey, target, requestID, start)
 		log.PromptTokens = prompt
 		log.CompletionTokens = completion
 		log.TotalTokens = prompt + completion
+		log.UsageEstimated = usageEstimated
 		log.Cost = costOf(target, prompt, completion)
 		log.LatencyMs = int(time.Since(start).Milliseconds())
 		log.RoutedBy = dec.RoutedBy
 		log.UpstreamModel = dec.Requested
-		log.PromptPreview = req.promptPreview()
-		log.PromptForEval = req.promptForEval()
-		persistUsage(d.Repo, apiKey, log)
-
-		// 计费：预算累计（仅对设置了月度预算的 Key 生效）
-		if log.Cost > 0 && apiKey.BudgetMonthly > 0 {
-			_ = d.Budget.Add(c, apiKey.ID, log.Cost)
+		if capturePrompt {
+			log.PromptPreview = req.promptPreview()
+			log.PromptForEval = req.promptForEval()
 		}
+		settleUsage(d.Repo, apiKey, log, lease, monthly)
+
 		// 写缓存（非流式）
 		_ = d.Cache.Set(c, chatCacheKey(target.Name, body), string(raw))
 
@@ -313,7 +371,7 @@ func chatCacheKey(modelName string, body []byte) string {
 }
 
 // streamChatForward SSE 逐块转发上游响应，统计 TTFT 与 usage。
-func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader, preview, promptForEval string) {
+func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *model.Model, dec *routing.Decision, requestID string, start time.Time, upstream io.Reader, requestBody []byte, preview, promptForEval string, lease *quotaLease, monthly *budgetLease) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -324,19 +382,22 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 	}
 
 	var (
-		ttft    int
-		first   = true
-		prompt  int
-		complet int
-		status  int16
-		errCode string
-		done    bool
-		scanner = bufio.NewScanner(upstream)
+		ttft          int
+		first         = true
+		prompt        int
+		complet       int
+		contentTokens int
+		usageReported bool
+		status        int16
+		errCode       string
+		done          bool
+		scanner       = bufio.NewScanner(upstream)
 	)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		contentTokens += proxy.ContentDeltaTokenEstimate(line)
 		if proxy.IsSSEDone(line) {
 			done = true
 		}
@@ -346,6 +407,7 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 		}
 		if u, hit := proxy.ParseUsageFromSSELine(line); hit {
 			prompt, complet = u.PromptTokens, u.CompletionTokens
+			usageReported = true
 		}
 		// 客户端提前断开（如用户取消）≠ 上游错误，需区分记录
 		if _, werr := c.Writer.WriteString(line); werr != nil {
@@ -367,11 +429,17 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 	if errCode == "" && !done {
 		status, errCode = http.StatusBadGateway, "upstream_stream_incomplete"
 	}
+	usageEstimated := !usageReported
+	if usageEstimated {
+		prompt = int(estimateInputTokens("chat/completions", requestBody))
+		complet = contentTokens
+	}
 	c.Set("result", errCode)
 	log := newUsageLog(apiKey, target, requestID, start)
 	log.PromptTokens = prompt
 	log.CompletionTokens = complet
 	log.TotalTokens = prompt + complet
+	log.UsageEstimated = usageEstimated
 	log.Cost = costOf(target, prompt, complet)
 	log.LatencyMs = int(time.Since(start).Milliseconds())
 	if ttft > 0 {
@@ -382,14 +450,11 @@ func streamChatForward(d *Deps, c *gin.Context, apiKey *model.ApiKey, target *mo
 	log.RoutedBy = dec.RoutedBy
 	log.UpstreamModel = dec.Requested
 	log.PromptPreview = truncateRunes(preview, 500)
-	if status == 0 {
+	if status == 0 && promptForEval != "" {
 		log.PromptForEval = promptForEval
 	}
-	persistUsage(d.Repo, apiKey, log)
+	settleUsage(d.Repo, apiKey, log, lease, monthly)
 
-	if log.Cost > 0 && apiKey.BudgetMonthly > 0 {
-		_ = d.Budget.Add(c, apiKey.ID, log.Cost)
-	}
 }
 
 // truncateRunes 按字符截断（安全处理多字节 UTF-8）。
@@ -423,6 +488,13 @@ func passthrough(d *Deps, path string) gin.HandlerFunc {
 			abortOpenAI(c, http.StatusBadRequest, "无法读取请求体")
 			return
 		}
+		if path == "completions" {
+			body, err = proxy.EnforceOutputCap(body)
+			if err != nil {
+				abortOpenAI(c, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		var req struct {
 			Model string `json:"model"`
 		}
@@ -435,6 +507,10 @@ func passthrough(d *Deps, path string) gin.HandlerFunc {
 			abortOpenAI(c, http.StatusBadRequest, "未知模型: "+req.Model)
 			return
 		}
+		if (apiKey.QuotaTokens > 0 || apiKey.BudgetMonthly > 0) && validateConstrainedInput(path, body) != nil {
+			abortOpenAI(c, http.StatusBadRequest, "配额或预算受限请求不支持多模态输入")
+			return
+		}
 		p, err := d.Providers.Get(m.ProviderID)
 		if err != nil || p.Enabled != 1 {
 			abortOpenAI(c, http.StatusBadGateway, "提供商不可用")
@@ -444,6 +520,42 @@ func passthrough(d *Deps, path string) gin.HandlerFunc {
 		if err != nil || upstreamKey == "" {
 			abortOpenAI(c, http.StatusBadGateway, "提供商 API Key 未配置")
 			return
+		}
+		lease, quotaStatus := reserveQuota(c, d, apiKey, requestID, estimateTokens(path, body))
+		if quotaStatus != 0 {
+			if quotaStatus == http.StatusTooManyRequests {
+				log := newUsageLog(apiKey, m, requestID, start)
+				log.Kind = path
+				log.ErrorCode = "quota_exceeded"
+				log.Status = http.StatusTooManyRequests
+				log.LatencyMs = int(time.Since(start).Milliseconds())
+				settleUsage(d.Repo, apiKey, log, nil, nil)
+				abortOpenAI(c, http.StatusTooManyRequests, "配额不足")
+			} else {
+				abortOpenAI(c, http.StatusServiceUnavailable, "配额服务暂不可用")
+			}
+			return
+		}
+		if lease != nil {
+			defer lease.Release()
+		}
+		monthly, budgetStatus := reserveBudget(c, d, apiKey, m, path, body, requestID)
+		if budgetStatus != 0 {
+			if budgetStatus == http.StatusTooManyRequests {
+				log := newUsageLog(apiKey, m, requestID, start)
+				log.Kind = path
+				log.ErrorCode = "budget_exceeded"
+				log.Status = http.StatusTooManyRequests
+				log.LatencyMs = int(time.Since(start).Milliseconds())
+				settleUsage(d.Repo, apiKey, log, lease, nil)
+				abortOpenAI(c, http.StatusTooManyRequests, "月度预算已用尽")
+			} else {
+				abortOpenAI(c, http.StatusServiceUnavailable, "预算服务暂不可用")
+			}
+			return
+		}
+		if monthly != nil {
+			defer monthly.Release()
 		}
 
 		upURL := proxy.ResolveURL(p.BaseURL, "/"+path)
@@ -458,12 +570,23 @@ func passthrough(d *Deps, path string) gin.HandlerFunc {
 			log.ErrorCode = "upstream_error"
 			log.Status = http.StatusBadGateway
 			log.LatencyMs = int(time.Since(start).Milliseconds())
-			persistUsage(d.Repo, apiKey, log)
+			log.Kind = path
+			settleUsage(d.Repo, apiKey, log, lease, monthly)
 			abortOpenAI(c, http.StatusBadGateway, "上游调用失败: "+err.Error())
 			return
 		}
 		defer resp.Body.Close()
-		raw, _ := io.ReadAll(resp.Body)
+		raw, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			log := newUsageLog(apiKey, m, requestID, start)
+			log.Kind = path
+			log.ErrorCode = "upstream_response_read_error"
+			log.Status = http.StatusBadGateway
+			log.LatencyMs = int(time.Since(start).Milliseconds())
+			settleUsage(d.Repo, apiKey, log, lease, monthly)
+			abortOpenAI(c, http.StatusBadGateway, "读取上游响应失败")
+			return
+		}
 
 		log := newUsageLog(apiKey, m, requestID, start)
 		log.Kind = path
@@ -471,20 +594,18 @@ func passthrough(d *Deps, path string) gin.HandlerFunc {
 			log.ErrorCode = "upstream_http_" + strconv.Itoa(resp.StatusCode)
 			log.Status = int16(resp.StatusCode)
 		} else {
-			if path == "embeddings" {
-				var r struct {
-					Usage *proxy.Usage `json:"usage"`
-				}
-				_ = json.Unmarshal(raw, &r)
-				if r.Usage != nil {
-					log.PromptTokens = r.Usage.PromptTokens
-					log.TotalTokens = r.Usage.TotalTokens
-				}
+			usageEstimated := !proxy.HasUsageInBody(raw)
+			if usageEstimated {
+				log.PromptTokens, log.CompletionTokens = estimateUsage(path, body, raw)
+			} else {
+				log.PromptTokens, log.CompletionTokens = proxy.ParseUsageFromBody(raw)
 			}
+			log.TotalTokens = log.PromptTokens + log.CompletionTokens
+			log.UsageEstimated = usageEstimated
 			log.Cost = costOf(m, log.PromptTokens, log.CompletionTokens)
 		}
 		log.LatencyMs = int(time.Since(start).Milliseconds())
-		persistUsage(d.Repo, apiKey, log)
+		settleUsage(d.Repo, apiKey, log, lease, monthly)
 
 		c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), raw)
 	}

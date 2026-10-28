@@ -22,8 +22,8 @@ type Repository struct {
 	Redis    *redis.Client
 }
 
-// New 初始化 MySQL 与 Redis 连接并做连通性检查。
-func New(cfg *config.Config) (*Repository, error) {
+// NewMySQL initializes only MySQL, for SQL migrations that do not need Redis.
+func NewMySQL(cfg *config.Config) (*Repository, error) {
 	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{
 		Logger:         gormlogger.Default.LogMode(gormlogger.Warn),
 		TranslateError: true, // 将 MySQL 1062 等错误翻译为 gorm.ErrDuplicatedKey（用于友好报错）
@@ -39,6 +39,15 @@ func New(cfg *config.Config) (*Repository, error) {
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
+	return &Repository{DB: db}, nil
+}
+
+// New initializes MySQL and Redis and verifies connectivity to both services.
+func New(cfg *config.Config) (*Repository, error) {
+	repo, err := NewMySQL(cfg)
+	if err != nil {
+		return nil, err
+	}
 	rdb := redis.NewClient(&redis.Options{
 		Addr:                  cfg.RedisAddr,
 		Password:              cfg.RedisPass,
@@ -46,10 +55,12 @@ func New(cfg *config.Config) (*Repository, error) {
 		ContextTimeoutEnabled: true,
 	})
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		_ = rdb.Close()
+		repo.Close()
 		return nil, err
 	}
-
-	return &Repository{DB: db, Redis: rdb}, nil
+	repo.Redis = rdb
+	return repo, nil
 }
 
 // AutoMigrate 同步表结构（演示环境使用；生产环境应走 migrations/ SQL 迁移）。

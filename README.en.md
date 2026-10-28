@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
-[![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org/)
 [![CI](https://github.com/jianyunyi/aegis-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/jianyunyi/aegis-gateway/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)](https://docs.docker.com/compose/)
 
@@ -24,26 +24,35 @@
 ## Quick Start
 
 ```bash
-# 1. One-command full stack (MySQL + Redis + Gateway + mock sandbox + Admin UI)
-#    Prerequisite: make build-linux (cross-compile, or done by CI)
+# 1. Generate local random secrets and a one-time admin password
+./scripts/init-compose-env.sh
+
+# 2. Build the Go binaries, then start MySQL + Redis + SQL migration + Gateway + mock + Admin UI
+make build-linux
 docker compose -f deploy/docker-compose.yml up -d --build
 
-# 2. Health check
+# 3. Health check
 curl http://localhost:8081/healthz
+curl http://localhost:8081/readyz
 
-# 3. Open the Admin UI (browser talks to the gateway API on 8081 directly, CORS enabled)
-open http://localhost:3000        # default account: admin / admin123
+# 4. Open the Admin UI; username is admin, password is printed once by the setup script
+open http://localhost:3000
 ```
 
-> Ports: Gateway `8081` (8080 in-container), Admin UI `3000`, MySQL `3303`, Redis `6380`, mock sandbox `8099`.
+> All host ports bind to `127.0.0.1`: Gateway `8081`, Admin UI `3000`, MySQL `3303`, Redis `6380`, mock sandbox `8099`. Put a trusted HTTPS reverse proxy in front before exposing any service publicly; do not publish the Compose HTTP ports directly.
 > Building the web image requires network access (`npm ci`, uses npmmirror registry); offline? Run the UI locally with `npm run dev`.
 
 Local development (without Docker):
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d mysql redis   # dependencies only
-cd backend && go run ./cmd/gateway                                # gateway on :8081
-cd web && npm install && npm run dev                              # admin UI on :3000
+./scripts/init-compose-env.sh                                    # once, if .env does not exist
+docker compose -f deploy/docker-compose.yml up -d mysql redis    # dependencies only
+set -a && . ./.env && set +a
+export APP_ENV=dev AUTO_MIGRATE=true
+export MYSQL_DSN="${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(127.0.0.1:3303)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+export REDIS_ADDR=127.0.0.1:6380
+(cd backend && go run ./cmd/gateway)                                # gateway on :8081
+(cd web && npm install && npm run dev)                              # admin UI on :3000
 ```
 
 ## Features
@@ -52,11 +61,11 @@ cd web && npm install && npm run dev                              # admin UI on 
 |---|---|
 | Unified access | OpenAI-compatible protocol — any official SDK works by changing `base_url`; SSE streaming with byte-level forwarding and TTFT (time-to-first-token) recording |
 | Security & auth | API keys stored as SHA-256 hashes (plaintext shown once at creation); provider keys AES-256-GCM encrypted; JWT-protected admin API |
-| Rate limiting | Redis Lua token bucket, per-key configurable `rps`/`burst` |
-| Billing & reconciliation | Per-token pricing + full call logs; periodic reconciliation between Redis counters and MySQL ledger (MySQL wins) |
+| Rate limiting | Redis Lua token bucket, admin login throttling, request body limit, and atomic API-key quota reservations |
+| Billing & reconciliation | Usage parsing, pricing, and ledger entries for chat/completions, completions, and embeddings; periodic Redis/MySQL reconciliation |
 | Observability | Dashboard (requests/cost/tokens/success rate/latency), 7/30-day trends, paginated log queries, daily billing |
 | Cost optimization | Semantic routing (Header > key default model > heuristics); request caching (composite key includes routed model); monthly budget auto-downgrade with alerts |
-| Evaluation flywheel | Sample real traffic → human labeling → A/B model regression (quality score + cost + latency report with a selection conclusion) |
+| Privacy & evaluation | Prompt capture is off by default; optional redacted sampling, per-request opt-out, and retention cleanup; manual samples remain available for A/B evaluation |
 | Admin UI | Next.js + Ant Design: login / dashboard / keys / providers / models / logs / billing / evals |
 
 ## Screenshots
@@ -77,7 +86,7 @@ cd web && npm install && npm run dev                              # admin UI on 
 Clients (OpenAI SDK / curl) ──Bearer ak_xxx──► AEGIS Gateway (Go/Gin)
    Middleware chain: KeyAuth → RateLimit → Semantic Routing → Request Cache → Budget Downgrade → Streaming Proxy
         │                                       │
-   Redis(rate-limit/cache/quota/budget)    MySQL(keys/models/call-logs/billing/evals)
+   Redis(rate-limit/cache/quota + budget reservations)    MySQL(keys/models/usage ledger/billing/evals; monthly budget authority)
         │
    Upstreams: OpenAI / DeepSeek / Qwen / Ollama / mock sandbox (unified OpenAI-compatible protocol)
 ```

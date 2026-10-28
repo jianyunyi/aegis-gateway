@@ -5,11 +5,48 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+const MaxOutputTokens = 32768
+
+// EnforceOutputCap makes the provider request obey the gateway hard output cap.
+// A client request above the cap is rejected rather than silently under-reserved.
+func EnforceOutputCap(body []byte) ([]byte, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+		return nil, fmt.Errorf("invalid JSON request")
+	}
+	seen := false
+	for _, field := range []string{"max_completion_tokens", "max_tokens"} {
+		raw, ok := payload[field]
+		if !ok {
+			continue
+		}
+		value, err := strconv.ParseInt(string(raw), 10, 64)
+		if err != nil || value <= 0 {
+			return nil, fmt.Errorf("%s must be a positive integer", field)
+		}
+		if value > MaxOutputTokens {
+			return nil, fmt.Errorf("%s exceeds maximum of %d", field, MaxOutputTokens)
+		}
+		seen = true
+	}
+	if !seen {
+		encoded, _ := json.Marshal(MaxOutputTokens)
+		payload["max_tokens"] = encoded
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 // Usage OpenAI 协议 usage 字段（用于计费）。
 type Usage struct {
@@ -82,6 +119,27 @@ func EnsureStreamUsage(body []byte) []byte {
 	return body
 }
 
+// RewriteModel replaces the client-requested model with the resolved upstream model.
+func RewriteModel(body []byte, model string) []byte {
+	if model == "" {
+		return body
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+		return body
+	}
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		return body
+	}
+	payload["model"] = encoded
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return body
+	}
+	return rewritten
+}
+
 // ParseUsageFromSSELine 从 SSE 的 data 行解析 usage（结束块通常带 usage）。
 // 返回 Usage 与是否命中。
 func ParseUsageFromSSELine(line string) (Usage, bool) {
@@ -117,6 +175,31 @@ func ParseUsageFromBody(raw []byte) (prompt, completion int) {
 		return 0, 0
 	}
 	return r.Usage.PromptTokens, r.Usage.CompletionTokens
+}
+
+// EstimateTextTokens is conservative: ASCII averages one token per four
+// characters; non-ASCII runes reserve two tokens to avoid undercounting CJK.
+func EstimateTextTokens(text string) int {
+	ascii, nonASCII := 0, 0
+	for _, r := range text {
+		if r <= 0x7f {
+			ascii++
+		} else {
+			nonASCII++
+		}
+	}
+	return (ascii+3)/4 + 2*nonASCII
+}
+
+// HasUsageInBody distinguishes a reported zero-usage response from a missing usage object.
+func HasUsageInBody(raw []byte) bool {
+	var r struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return false
+	}
+	return len(r.Usage) > 0 && string(r.Usage) != "null"
 }
 
 // ParseContentFromBody 提取非流式响应首条 message content（评测打分用）。
@@ -157,6 +240,37 @@ func HasContentDelta(line string) bool {
 		}
 	}
 	return false
+}
+
+// ContentDeltaTokenEstimate estimates output tokens in an SSE event when usage is absent.
+func ContentDeltaTokenEstimate(line string) int {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "data:") {
+		return 0
+	}
+	var event struct {
+		Choices []struct {
+			Delta struct {
+				Content      string            `json:"content"`
+				ToolCalls    []json.RawMessage `json:"tool_calls"`
+				FunctionCall json.RawMessage   `json:"function_call"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))), &event) != nil {
+		return 0
+	}
+	var output strings.Builder
+	for _, choice := range event.Choices {
+		output.WriteString(choice.Delta.Content)
+		for _, call := range choice.Delta.ToolCalls {
+			output.Write(call)
+		}
+		if len(choice.Delta.FunctionCall) > 0 && string(choice.Delta.FunctionCall) != "null" {
+			output.Write(choice.Delta.FunctionCall)
+		}
+	}
+	return EstimateTextTokens(output.String())
 }
 
 // IsSSEDone accepts either serialization of the SSE data field.

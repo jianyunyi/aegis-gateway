@@ -65,7 +65,40 @@ jobs:
       - name: Usage lock and compact SSE DONE regressions
         run: go test -tags=integration ./integration -race -count=1 -timeout=60s -run 'TestTwoInstancesFailOpenUsageProjection|TestQuotaProjectionDoesNotRegress|TestReconcileRedisStallDoesNotBlockUsage|TestReconcileRetriesConcurrentUsage|TestTwoInstancesStreamResults' -v
       - name: Two-instance fault and reconciliation acceptance
-        run: go test -tags=integration ./integration ./internal/middleware -race -count=1 -timeout=120s -v
+        run: go test -tags=integration ./integration ./internal/middleware ./internal/repository -race -count=1 -timeout=120s -v
+      - name: MySQL migration integration tests
+        run: go test -tags=integration ./migrations -race -count=1 -timeout=120s -v
+
+  compose-build:
+    name: Clean checkout Compose configuration and image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate disposable Compose secrets
+        run: ./scripts/init-compose-env.sh >/dev/null
+      - name: Validate Compose configuration
+        run: docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
+      - name: Build every Compose image
+        run: docker compose --env-file .env -f deploy/docker-compose.yml build --pull
+      - name: Start clean-checkout stack and verify readiness
+        run: |
+          docker compose --env-file .env -f deploy/docker-compose.yml up -d
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8081/readyz; then
+              echo
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose --env-file .env -f deploy/docker-compose.yml logs --no-color
+          exit 1
+      - name: Clean up Compose stack
+        if: always()
+        run: |
+          if [ -f .env ]; then
+            docker compose --env-file .env -f deploy/docker-compose.yml down --volumes --remove-orphans
+          fi
 
   frontend:
     name: Frontend (typecheck + build)
