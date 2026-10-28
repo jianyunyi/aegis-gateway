@@ -31,16 +31,16 @@ ensure-compose-env: ## 初始化本地 Compose 密钥（不会覆盖已有 .env�
 	@if [ ! -f .env ]; then ./scripts/init-compose-env.sh; fi
 
 up: ensure-compose-env ## 一键启动全栈（构建镜像并后台运行）
-	docker compose -f deploy/docker-compose.yml up -d --build
+	docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 
 down:       ## 停止全栈
-	docker compose -f deploy/docker-compose.yml down
+	docker compose --env-file .env -f deploy/docker-compose.yml down
 
 logs:       ## 跟随日志
-	docker compose -f deploy/docker-compose.yml logs -f
+	docker compose --env-file .env -f deploy/docker-compose.yml logs -f
 
 ps:         ## 查看服务状态
-	docker compose -f deploy/docker-compose.yml ps
+	docker compose --env-file .env -f deploy/docker-compose.yml ps
 
 migrate:    ## 仅执行数据库迁移
 	cd backend && if [ -f ../.env ]; then set -a; . ../.env; set +a; fi; \
