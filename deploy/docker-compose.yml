@@ -2,60 +2,61 @@ x-gateway-env: &gateway-env
   APP_ENV: prod
   GIN_MODE: release
   HTTP_ADDR: ":8080"
-  MYSQL_DSN: "${MYSQL_USER:-aegis}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@tcp(mysql:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+  MYSQL_DSN_FILE: /run/secrets/mysql_dsn
   REDIS_ADDR: "redis:6379"
-  REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"
-  JWT_SECRET: "${JWT_SECRET:?set a random JWT_SECRET of at least 32 bytes in .env}"
+  REDIS_PASSWORD_FILE: /run/secrets/redis_password
+  JWT_SECRET_FILE: /run/secrets/jwt_secret
   AUTO_MIGRATE: "false"
   SEED_DATA: "${SEED_DATA:-false}"
   BOOTSTRAP_ADMIN_USERNAME: "${BOOTSTRAP_ADMIN_USERNAME:-}"
-  BOOTSTRAP_ADMIN_PASSWORD: "${BOOTSTRAP_ADMIN_PASSWORD:-}"
+  BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
   PROMPT_CAPTURE_ENABLED: "${PROMPT_CAPTURE_ENABLED:-false}"
   PROMPT_RETENTION_DAYS: "${PROMPT_RETENTION_DAYS:-30}"
   MAX_REQUEST_BODY_BYTES: "${MAX_REQUEST_BODY_BYTES:-2097152}"
   RATE_LIMIT_FAIL_OPEN: "false"
   CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"
-
 x-migration-env: &migration-env
   APP_ENV: prod
-  MYSQL_DSN: "${MYSQL_USER:-aegis}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@tcp(mysql:3306)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+  MYSQL_DSN_FILE: /run/secrets/mysql_dsn
   AUTO_MIGRATE: "false"
-
 services:
   mysql:
     image: mysql:8.0
     container_name: aegis-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}"
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
       MYSQL_DATABASE: aegis
       MYSQL_USER: "${MYSQL_USER:-aegis}"
-      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}"
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+    secrets:
+      - mysql_root_password
+      - mysql_password
     ports:
       - "127.0.0.1:3303:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\""]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "--silent"]
       interval: 5s
       timeout: 3s
       retries: 20
-
   redis:
     image: redis:7
     container_name: aegis-redis
-    environment:
-      REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"
-    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    command: ["redis-server", "/run/secrets/redis.conf", "--appendonly", "yes"]
+    secrets:
+      - source: redis_conf
+        target: redis.conf
     ports:
       - "127.0.0.1:6380:6379"
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      # Check that Redis responds and requires auth without passing the password.
+      test: ["CMD-SHELL", "redis-cli ping 2>&1 | grep -q NOAUTH"]
       interval: 5s
       timeout: 3s
       retries: 20
-
   mockupstream:
     # Optional local OpenAI-compatible sandbox; host access is loopback-only.
     build:
@@ -64,25 +65,32 @@ services:
     container_name: aegis-mockupstream
     ports:
       - "127.0.0.1:8099:8099"
-
   migrate:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
     container_name: aegis-migrate
     command: ["-migrate-only"]
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
     environment: *migration-env
+    secrets:
+      - mysql_dsn
     restart: "no"
     depends_on:
       mysql:
         condition: service_healthy
-
   gateway:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
     container_name: aegis-gateway
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
     environment: *gateway-env
+    secrets:
+      - mysql_dsn
+      - redis_password
+      - jwt_secret
+      - bootstrap_admin_password
     ports:
       # Publish only to localhost; terminate HTTPS at a trusted reverse proxy.
       - "127.0.0.1:8081:8080"
@@ -93,7 +101,6 @@ services:
         condition: service_healthy
       mockupstream:
         condition: service_started
-
   web:
     build:
       context: ..
@@ -106,7 +113,21 @@ services:
       - "127.0.0.1:3000:3000"
     depends_on:
       - gateway
-
+secrets:
+  mysql_root_password:
+    file: "${SECRETS_DIR:-../.secrets}/mysql_root_password"
+  mysql_password:
+    file: "${SECRETS_DIR:-../.secrets}/mysql_password"
+  mysql_dsn:
+    file: "${SECRETS_DIR:-../.secrets}/mysql_dsn"
+  redis_password:
+    file: "${SECRETS_DIR:-../.secrets}/redis_password"
+  redis_conf:
+    file: "${SECRETS_DIR:-../.secrets}/redis.conf"
+  jwt_secret:
+    file: "${SECRETS_DIR:-../.secrets}/jwt_secret"
+  bootstrap_admin_password:
+    file: "${SECRETS_DIR:-../.secrets}/bootstrap_admin_password"
 volumes:
   mysql-data:
   redis-data:

@@ -76,7 +76,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Generate disposable Compose secrets
-        run: ./scripts/init-compose-env.sh >/dev/null
+        run: |
+          ./scripts/init-compose-env.sh >/dev/null
+          test "$(stat -c %a .secrets)" = 700
+          for secret in mysql_root_password mysql_password mysql_dsn mysql_dsn_host redis_password jwt_secret bootstrap_admin_password; do
+            test "$(stat -c %a ".secrets/$secret")" = 600
+          done
+          test "$(stat -c %a .secrets/redis.conf)" = 644
+          ! grep -Eq '(^|_)(PASSWORD|SECRET|DSN)=' .env
       - name: Validate Compose configuration
         run: docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
       - name: Build every Compose image

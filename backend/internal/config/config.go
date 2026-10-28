@@ -51,16 +51,16 @@ func Load() *Config {
 	return &Config{
 		Env:                 env,
 		HTTPAddr:            getEnv("HTTP_ADDR", ":8081"),
-		MySQLDSN:            getEnv("MYSQL_DSN", ""),
+		MySQLDSN:            getSecretEnv("MYSQL_DSN", ""),
 		RedisAddr:           getEnv("REDIS_ADDR", "127.0.0.1:6379"),
-		RedisPass:           getEnv("REDIS_PASSWORD", ""),
+		RedisPass:           getSecretEnv("REDIS_PASSWORD", ""),
 		AutoMigrate:         getBool("AUTO_MIGRATE", dev),
-		JWTSecret:           getEnv("JWT_SECRET", jwtDefault),
+		JWTSecret:           getSecretEnv("JWT_SECRET", jwtDefault),
 		JWTExpire:           getDuration("JWT_EXPIRE_MINUTES", 12*60, time.Minute, false),
 		UpstreamTimeout:     getDuration("UPSTREAM_TIMEOUT_SECONDS", 180, time.Second, false),
 		SeedData:            getBool("SEED_DATA", false),
 		BootstrapAdminUser:  getEnv("BOOTSTRAP_ADMIN_USERNAME", ""),
-		BootstrapAdminPass:  getEnv("BOOTSTRAP_ADMIN_PASSWORD", ""),
+		BootstrapAdminPass:  getSecretEnv("BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CapturePrompts:      getBool("PROMPT_CAPTURE_ENABLED", false),
 		PromptRetentionDays: getInt("PROMPT_RETENTION_DAYS", 30, 1, 3650),
 		BillingInterval:     getDuration("BILLING_INTERVAL_MINUTES", 5, time.Minute, true),
@@ -147,6 +147,20 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// getSecretEnv reads a secret from KEY_FILE when configured, otherwise from KEY.
+// A configured but unreadable secret file fails closed rather than falling back
+// to an environment value that may be stale or unexpectedly exposed.
+func getSecretEnv(key, fallback string) string {
+	if path := os.Getenv(key + "_FILE"); path != "" {
+		value, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimRight(string(value), "\r\n")
+	}
+	return getEnv(key, fallback)
 }
 
 func getBool(key string, def bool) bool {

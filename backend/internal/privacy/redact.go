@@ -4,7 +4,9 @@
 package privacy
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"regexp"
 	"strings"
 )
@@ -34,42 +36,177 @@ func Redact(text string) string {
 	return out
 }
 
-type message struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+const redactedValue = "[REDACTED]"
+
+type orderedField struct {
+	key   string
+	value any
 }
 
-// RedactMessages redacts textual content in a serialized OpenAI messages array.
-func RedactMessages(encoded string) (string, error) {
-	var messages []message
-	if err := json.Unmarshal([]byte(encoded), &messages); err != nil {
-		return "", err
-	}
-	for i := range messages {
-		var content string
-		if err := json.Unmarshal(messages[i].Content, &content); err == nil {
-			redacted, err := json.Marshal(Redact(content))
-			if err != nil {
-				return "", err
-			}
-			messages[i].Content = redacted
-			continue
+type orderedObject []orderedField
+
+func (object orderedObject) MarshalJSON() ([]byte, error) {
+	var encoded bytes.Buffer
+	encoded.WriteByte('{')
+	for i, field := range object {
+		if i > 0 {
+			encoded.WriteByte(',')
 		}
-		var parts []map[string]any
-		if err := json.Unmarshal(messages[i].Content, &parts); err == nil {
-			for _, part := range parts {
-				if text, ok := part["text"].(string); ok {
-					part["text"] = Redact(text)
+		key, err := json.Marshal(field.key)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(field.value)
+		if err != nil {
+			return nil, err
+		}
+		encoded.Write(key)
+		encoded.WriteByte(':')
+		encoded.Write(value)
+	}
+	encoded.WriteByte('}')
+	return encoded.Bytes(), nil
+}
+
+func decodeOrderedJSON(encoded string) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(encoded))
+	decoder.UseNumber()
+	value, err := readOrderedValue(decoder)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return nil, err
+	}
+	return value, nil
+}
+
+func readOrderedValue(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	switch token {
+	case json.Delim('{'):
+		object := orderedObject{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, io.ErrUnexpectedEOF
+			}
+			value, err := readOrderedValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			object = append(object, orderedField{key: key, value: value})
+		}
+		_, err := decoder.Token()
+		return object, err
+	case json.Delim('['):
+		array := []any{}
+		for decoder.More() {
+			value, err := readOrderedValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			array = append(array, value)
+		}
+		_, err := decoder.Token()
+		return array, err
+	case json.Delim(']'), json.Delim('}'):
+		return nil, io.ErrUnexpectedEOF
+	default:
+		return token, nil
+	}
+}
+
+// sensitiveField reports whether a JSON object key identifies a value that
+// must be removed in its entirety. Normalizing separators also covers common
+// spellings such as api-key, access_token, and client-secret.
+func sensitiveField(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.NewReplacer("-", "", "_", "", " ", "").Replace(key)
+	for _, name := range []string{
+		"password", "passwd", "secret", "token", "apikey", "accesstoken",
+		"refreshtoken", "clientsecret", "privatekey", "authorization",
+		"credential", "credentials",
+	} {
+		if key == name || strings.HasSuffix(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactJSONValue recursively preserves JSON objects and arrays while redacting
+// every string leaf. A string containing a JSON object/array (for example
+// tool_calls.function.arguments) is kept a string, but its nested JSON is
+// decoded, redacted, and encoded again.
+func redactJSONValue(value any) any {
+	switch value := value.(type) {
+	case orderedObject:
+		for i := range value {
+			if sensitiveField(value[i].key) {
+				value[i].value = redactedValue
+				continue
+			}
+			value[i].value = redactJSONValue(value[i].value)
+		}
+		return value
+	case map[string]any:
+		for key, child := range value {
+			if sensitiveField(key) {
+				value[key] = redactedValue
+				continue
+			}
+			value[key] = redactJSONValue(child)
+		}
+		return value
+	case []any:
+		for i, child := range value {
+			value[i] = redactJSONValue(child)
+		}
+		return value
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if len(trimmed) >= 2 && (trimmed[0] == '{' || trimmed[0] == '[') {
+			if nested, err := decodeOrderedJSON(trimmed); err == nil {
+				switch nested.(type) {
+				case orderedObject, []any:
+					encoded, err := json.Marshal(redactJSONValue(nested))
+					if err == nil {
+						return Redact(string(encoded))
+					}
 				}
 			}
-			redacted, err := json.Marshal(parts)
-			if err != nil {
-				return "", err
-			}
-			messages[i].Content = redacted
+		}
+		return Redact(value)
+	default:
+		return value
+	}
+}
+
+// RedactMessages redacts every string leaf in a serialized OpenAI messages
+// array while preserving the complete JSON message structure.
+func RedactMessages(encoded string) (string, error) {
+	messages, err := decodeOrderedJSON(encoded)
+	if err != nil {
+		return "", err
+	}
+	if messages != nil {
+		if _, ok := messages.([]any); !ok {
+			return "", io.ErrUnexpectedEOF
 		}
 	}
-	encodedMessages, err := json.Marshal(messages)
+	redacted := redactJSONValue(messages)
+	encodedMessages, err := json.Marshal(redacted)
 	if err != nil {
 		return "", err
 	}
