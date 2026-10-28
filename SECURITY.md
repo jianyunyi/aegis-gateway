@@ -20,8 +20,8 @@
 | 提供商 Key | AES-256-GCM 加密落库，代理调用时才解密 |
 | 日志与隐私 | prompt 采集默认关闭；显式启用后先做常见凭据/直接标识符规则脱敏，并支持请求级退出与保留期清理 |
 | 初始化凭证 | 不含公开 JWT fallback、`admin/admin123` 或演示 API Key；首个管理员仅通过显式引导凭据创建 |
-| 防滥用 | 管理员登录按客户端 IP 限流；请求体有大小上限；Redis 配额预留原子执行且依赖故障时拒绝请求 |
-| 部署 | Compose 使用专用 MySQL 用户、认证 Redis，宿主端口只绑定 loopback；公网发布必须通过 HTTPS 反向代理 |
+| 防滥用 | 管理员登录按客户端 IP、账号及 IP+账号联合限流；请求体有大小上限；Redis 配额预留原子执行且依赖故障时拒绝请求 |
+| 部署 | Compose 使用专用 MySQL 用户、认证 Redis 和只读秘密文件挂载，宿主端口只绑定 loopback；公网发布必须通过 HTTPS 反向代理 |
 
 ## 支持版本
 
@@ -33,6 +33,7 @@
 ## 生产部署检查清单
 
 - [ ] 为 MySQL root、应用账号、Redis 和 `JWT_SECRET` 设置独立随机秘密
+- [ ] 将秘密通过只读文件挂载和对应 `*_FILE` 配置注入，不要把秘密写入 Compose `environment`、`.env` 或进程参数
 - [ ] 首个管理员通过显式引导账号/密码创建，不启用公开默认值
 - [ ] 保持 `AUTO_MIGRATE=false`，按版本执行 SQL migrations
 - [ ] 保持 Redis 认证和限流 fail-closed

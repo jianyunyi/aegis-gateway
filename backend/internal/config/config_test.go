@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +121,54 @@ func TestDevelopmentRequiresExplicitDatabaseDSN(t *testing.T) {
 	t.Setenv("MYSQL_DSN", "")
 	if err := Load().Validate(); err == nil {
 		t.Fatal("development must not silently fall back to a public database credential")
+	}
+}
+
+func TestSecretFilesTakePrecedenceAndTrimLineEndings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jwt-secret")
+	if err := os.WriteFile(path, []byte(strings.Repeat("f", 40)+"\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JWT_SECRET", "environment-secret-must-not-win")
+	t.Setenv("JWT_SECRET_FILE", path)
+	if got := Load().JWTSecret; got != strings.Repeat("f", 40) {
+		t.Fatalf("secret file was not used correctly: got %q", got)
+	}
+}
+
+func TestUnreadableSecretFileFailsClosedWithoutEnvironmentFallback(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("e", 40))
+	t.Setenv("JWT_SECRET_FILE", filepath.Join(t.TempDir(), "missing-secret"))
+	if got := Load().JWTSecret; got != "" {
+		t.Fatalf("unreadable secret file must not fall back to env; got %q", got)
+	}
+}
+
+func TestAllProductionSecretsCanBeLoadedFromFiles(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("AUTO_MIGRATE", "false")
+	t.Setenv("SEED_DATA", "true")
+	t.Setenv("BOOTSTRAP_ADMIN_USERNAME", "owner")
+	values := map[string]string{
+		"MYSQL_DSN":                "aegis_file:db-file-password@tcp(mysql:3306)/aegis",
+		"REDIS_PASSWORD":           "redis-file-password",
+		"JWT_SECRET":               strings.Repeat("j", 40),
+		"BOOTSTRAP_ADMIN_PASSWORD": strings.Repeat("p", 16),
+	}
+	for name, value := range values {
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(name, "environment-value-must-not-win")
+		t.Setenv(name+"_FILE", path)
+	}
+	cfg := Load()
+	if cfg.MySQLDSN != values["MYSQL_DSN"] || cfg.RedisPass != values["REDIS_PASSWORD"] || cfg.JWTSecret != values["JWT_SECRET"] || cfg.BootstrapAdminPass != values["BOOTSTRAP_ADMIN_PASSWORD"] {
+		t.Fatal("one or more production secrets were not loaded from their files")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("file-backed production config rejected: %v", err)
 	}
 }
 
