@@ -81,6 +81,24 @@ jobs:
         run: docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
       - name: Build every Compose image
         run: docker compose --env-file .env -f deploy/docker-compose.yml build --pull
+      - name: Start clean-checkout stack and verify readiness
+        run: |
+          docker compose --env-file .env -f deploy/docker-compose.yml up -d
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8081/readyz; then
+              echo
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose --env-file .env -f deploy/docker-compose.yml logs --no-color
+          exit 1
+      - name: Clean up Compose stack
+        if: always()
+        run: |
+          if [ -f .env ]; then
+            docker compose --env-file .env -f deploy/docker-compose.yml down --volumes --remove-orphans
+          fi
 
   frontend:
     name: Frontend (typecheck + build)
