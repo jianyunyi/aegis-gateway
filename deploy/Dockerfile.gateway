@@ -1,9 +1,17 @@
-# AEGIS 网关运行时镜像（离线构建）：
-# 二进制由宿主机交叉编译（make build-linux），此处只打包进 alpine 运行。
-# 有网络环境时可用多阶段 golang 镜像构建（见 .github/workflows/ci.yml 说明）。
+# AEGIS 网关运行时镜像：在 Docker build context 内编译 Linux 二进制，
+# 不依赖宿主机预先生成 backend/bin/gateway-linux。
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
+
+COPY backend/go.mod backend/go.sum ./backend/
+RUN cd backend && go mod download
+COPY backend/ ./backend/
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags='-s -w' -o /out/gateway ./cmd/gateway
+
 FROM alpine:3.20
 RUN adduser -D -u 10001 app
-COPY backend/bin/gateway-linux /usr/local/bin/gateway
+COPY --from=builder /out/gateway /usr/local/bin/gateway
 USER app
 EXPOSE 8080
 ENTRYPOINT ["gateway"]

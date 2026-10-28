@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -15,6 +16,11 @@ import (
 	"aegis-gateway/internal/model"
 	"aegis-gateway/internal/proxy"
 	"aegis-gateway/internal/repository"
+)
+
+const (
+	maxEstimatedOutputTokens int64 = proxy.MaxOutputTokens
+	defaultEstimatedOutput   int64 = maxEstimatedOutputTokens
 )
 
 type quotaLease struct {
@@ -174,6 +180,12 @@ func settleUsage(repo *repository.Repository, key *model.ApiKey, log *model.Usag
 
 func estimateTokens(kind string, body []byte) int64 {
 	input, output := estimateTokenBreakdown(kind, body)
+	if output > maxEstimatedOutputTokens {
+		output = maxEstimatedOutputTokens
+	}
+	if input > math.MaxInt64-output {
+		return math.MaxInt64
+	}
 	if input+output < 1 {
 		return 1
 	}
@@ -232,44 +244,37 @@ func estimateTokenBreakdown(kind string, body []byte) (int64, int64) {
 	}
 	output := requestedOutputTokens(payload)
 	if output == 0 {
-		output = 4096
+		// A missing cap is provider-controlled; use a bounded conservative hold.
+		output = defaultEstimatedOutput
+	}
+	if output > maxEstimatedOutputTokens {
+		output = maxEstimatedOutputTokens
 	}
 	return input, output
 }
 
 func estimateInputTokens(kind string, body []byte) int64 {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return 1
-	}
-	var inputText strings.Builder
-	switch kind {
-	case "chat/completions":
-		if messages, ok := payload["messages"].([]any); ok {
-			for _, item := range messages {
-				if message, ok := item.(map[string]any); ok {
-					appendText(&inputText, message["content"])
-				}
-			}
-		}
-	default:
-		appendText(&inputText, payload["prompt"])
-		appendText(&inputText, payload["input"])
-	}
-	return int64(proxy.EstimateTextTokens(inputText.String()))
+	// One token per request byte is a conservative, auditable upper bound for
+	// ordinary text; do not under-reserve using a tokenizer heuristic.
+	input := int64(len(body))
+	return input
 }
 
 func requestedOutputTokens(payload map[string]any) int64 {
+	var maximum int64
 	for _, field := range []string{"max_completion_tokens", "max_tokens"} {
 		value, ok := payload[field]
 		if !ok {
 			continue
 		}
-		if number, ok := value.(float64); ok && number > 0 {
-			return int64(math.Min(number, 4_000_000))
+		if number, ok := value.(float64); ok && number > 0 && !math.IsNaN(number) && !math.IsInf(number, 0) {
+			bounded := int64(math.Min(number, float64(maxEstimatedOutputTokens)))
+			if bounded > maximum {
+				maximum = bounded
+			}
 		}
 	}
-	return 0
+	return maximum
 }
 
 func appendText(out *strings.Builder, value any) {
@@ -285,4 +290,55 @@ func appendText(out *strings.Builder, value any) {
 			appendText(out, text)
 		}
 	}
+}
+
+// validateConstrainedInput rejects multimodal payloads until a safe token
+// bound is implemented for them. Unrestricted requests remain compatible.
+func validateConstrainedInput(kind string, body []byte) error {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return fmt.Errorf("invalid JSON request")
+	}
+	var containsObject func(any) bool
+	containsObject = func(value any) bool {
+		switch item := value.(type) {
+		case map[string]any:
+			return true
+		case []any:
+			for _, nested := range item {
+				if containsObject(nested) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if kind == "chat/completions" {
+		// These fields can request audio or other modalities whose token cost is
+		// not conservatively represented by body bytes alone.
+		if modalities, exists := payload["modalities"]; exists && modalities != nil {
+			return fmt.Errorf("multimodal input is not supported for quota- or budget-limited requests")
+		}
+		if audio, exists := payload["audio"]; exists && audio != nil {
+			return fmt.Errorf("multimodal input is not supported for quota- or budget-limited requests")
+		}
+		if messages, ok := payload["messages"].([]any); ok {
+			for _, raw := range messages {
+				message, ok := raw.(map[string]any)
+				if !ok || containsObject(message["content"]) {
+					return fmt.Errorf("multimodal input is not supported for quota- or budget-limited requests")
+				}
+				for _, field := range []string{"audio", "modalities"} {
+					if value, exists := message[field]; exists && value != nil {
+						return fmt.Errorf("multimodal input is not supported for quota- or budget-limited requests")
+					}
+				}
+			}
+		}
+	} else if kind == "completions" && containsObject(payload["prompt"]) {
+		return fmt.Errorf("multimodal input is not supported for quota- or budget-limited requests")
+	} else if kind == "embeddings" && containsObject(payload["input"]) {
+		return fmt.Errorf("multimodal input is not supported for quota- or budget-limited requests")
+	}
+	return nil
 }

@@ -134,6 +134,9 @@ func persistUsage(repo *repository.Repository, key *model.ApiKey, log *model.Usa
 		defer projectionCancel()
 		if err := repo.ProjectQuota(projectionCtx, key.ID, committedTokens); err != nil {
 			slog.Error("quota projection failed", "request_id", log.RequestID, "error", err)
+			// Releasing the reservation while the fast counter is stale would
+			// allow a later request to pass the quota.
+			return err
 		}
 	}
 	return nil
@@ -153,6 +156,11 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			abortOpenAI(c, http.StatusBadRequest, "无法读取请求体")
+			return
+		}
+		body, err = proxy.EnforceOutputCap(body)
+		if err != nil {
+			abortOpenAI(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		var req openaiChatReq
@@ -176,6 +184,10 @@ func ChatCompletions(d *Deps) gin.HandlerFunc {
 		}
 
 		target := dec.Model
+		if (apiKey.QuotaTokens > 0 || apiKey.BudgetMonthly > 0) && validateConstrainedInput("chat/completions", body) != nil {
+			abortOpenAI(c, http.StatusBadRequest, "配额或预算受限请求不支持多模态输入")
+			return
+		}
 		lease, quotaStatus := reserveQuota(c, d, apiKey, requestID, estimateTokens("chat/completions", body))
 		if quotaStatus != 0 {
 			if quotaStatus == http.StatusTooManyRequests {
@@ -476,6 +488,13 @@ func passthrough(d *Deps, path string) gin.HandlerFunc {
 			abortOpenAI(c, http.StatusBadRequest, "无法读取请求体")
 			return
 		}
+		if path == "completions" {
+			body, err = proxy.EnforceOutputCap(body)
+			if err != nil {
+				abortOpenAI(c, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		var req struct {
 			Model string `json:"model"`
 		}
@@ -486,6 +505,10 @@ func passthrough(d *Deps, path string) gin.HandlerFunc {
 		m, err := d.Models.GetByName(req.Model)
 		if err != nil {
 			abortOpenAI(c, http.StatusBadRequest, "未知模型: "+req.Model)
+			return
+		}
+		if (apiKey.QuotaTokens > 0 || apiKey.BudgetMonthly > 0) && validateConstrainedInput(path, body) != nil {
+			abortOpenAI(c, http.StatusBadRequest, "配额或预算受限请求不支持多模态输入")
 			return
 		}
 		p, err := d.Providers.Get(m.ProviderID)

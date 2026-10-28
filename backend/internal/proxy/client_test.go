@@ -135,3 +135,13 @@ func TestRewriteModelPreservesRequestFields(t *testing.T) {
 		t.Fatalf("rewritten request lost fields: %+v", got)
 	}
 }
+
+func TestEnforceOutputCap(t *testing.T) {
+	if _, err := EnforceOutputCap([]byte(`{"max_tokens":32769}`)); err == nil {
+		t.Fatal("oversized output cap must be rejected")
+	}
+	body, err := EnforceOutputCap([]byte(`{"prompt":"x"}`))
+	if err != nil || !strings.Contains(string(body), `"max_tokens":32768`) {
+		t.Fatalf("missing cap was not injected: %s err=%v", body, err)
+	}
+}

@@ -1,5 +1,5 @@
 # AEGIS 常用命令入口（Windows 无 make 时，见 README 的直接命令对照）
-.PHONY: dev build build-linux test vet tidy fmt up down logs ps migrate
+.PHONY: dev build build-linux test vet tidy fmt ensure-compose-env up down logs ps migrate
 
 dev:        ## 本地运行网关（需先启动 mysql/redis）
 	cd backend && if [ -f ../.env ]; then set -a; . ../.env; set +a; fi; \
@@ -27,7 +27,10 @@ tidy:       ## 整理依赖
 fmt:        ## 代码格式检查
 	cd backend && gofmt -l .
 
-up:         ## 一键启动全栈（构建镜像并后台运行）
+ensure-compose-env: ## 初始化本地 Compose 密钥（不会覆盖已有 .env）
+	@if [ ! -f .env ]; then ./scripts/init-compose-env.sh; fi
+
+up: ensure-compose-env ## 一键启动全栈（构建镜像并后台运行）
 	docker compose -f deploy/docker-compose.yml up -d --build
 
 down:       ## 停止全栈

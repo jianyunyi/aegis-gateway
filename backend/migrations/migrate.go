@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -15,13 +16,48 @@ import (
 //go:embed *.sql
 var files embed.FS
 
-// Apply executes unapplied SQL migrations in filename order. A pinned database
-// connection is used because migrations may use MySQL session variables and PREPARE.
+const (
+	// MySQL advisory lock names are limited to 64 characters. Keep this name
+	// stable: every gateway instance must contend for the same lock.
+	migrationLockName = "aegis_gateway:versioned_migrations"
+	// Keep lock acquisition and cleanup bounded even if the caller is canceled.
+	migrationLockWaitSeconds = 5
+	migrationLockTimeout     = 5 * time.Second
+)
+
+// Apply executes unapplied SQL migrations in filename order. The whole
+// discovery/apply/record sequence runs on one pinned MySQL connection while
+// holding a session advisory lock. Migrations deliberately do not use a
+// transaction: MySQL DDL implicitly commits, so each migration is written to
+// be idempotent and is retried when its version row was not recorded.
 func Apply(ctx context.Context, db *gorm.DB) error {
 	if db.Dialector.Name() != "mysql" {
 		return fmt.Errorf("versioned SQL migrations require MySQL, got %s", db.Dialector.Name())
 	}
-	return db.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+	return applyWithFS(ctx, db, files)
+}
+
+// applyWithFS is kept package-private so integration tests can exercise the
+// lock and retry behavior with a small isolated migration without modifying
+// the production embedded migration set.
+func applyWithFS(ctx context.Context, db *gorm.DB, migrationFS fs.FS) error {
+	return db.WithContext(ctx).Connection(func(conn *gorm.DB) (resultErr error) {
+		locked, err := acquireMigrationLock(conn)
+		if err != nil {
+			return err
+		}
+		if !locked {
+			return fmt.Errorf("timed out acquiring migration advisory lock %q after %d seconds", migrationLockName, migrationLockWaitSeconds)
+		}
+		defer func() {
+			// A canceled caller context must not prevent RELEASE_LOCK from being
+			// sent on the same pinned session.
+			releaseCtx := context.WithoutCancel(ctx)
+			if releaseErr := releaseMigrationLock(conn.WithContext(releaseCtx)); releaseErr != nil && resultErr == nil {
+				resultErr = releaseErr
+			}
+		}()
+
 		if err := conn.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version VARCHAR(255) NOT NULL PRIMARY KEY,
 			applied_at DATETIME(3) NOT NULL
@@ -38,9 +74,9 @@ func Apply(ctx context.Context, db *gorm.DB) error {
 			applied[version] = struct{}{}
 		}
 
-		entries, err := fs.ReadDir(files, ".")
+		entries, err := fs.ReadDir(migrationFS, ".")
 		if err != nil {
-			return err
+			return fmt.Errorf("read migration directory: %w", err)
 		}
 		var names []string
 		for _, entry := range entries {
@@ -54,9 +90,9 @@ func Apply(ctx context.Context, db *gorm.DB) error {
 			if _, ok := applied[version]; ok {
 				continue
 			}
-			source, err := files.ReadFile(name)
+			source, err := fs.ReadFile(migrationFS, name)
 			if err != nil {
-				return err
+				return fmt.Errorf("read migration %s: %w", name, err)
 			}
 			for _, statement := range splitStatements(string(source)) {
 				if err := conn.Exec(statement).Error; err != nil {
@@ -69,6 +105,32 @@ func Apply(ctx context.Context, db *gorm.DB) error {
 		}
 		return nil
 	})
+}
+
+func acquireMigrationLock(conn *gorm.DB) (bool, error) {
+	var acquired int
+	lockCtx, cancel := context.WithTimeout(context.WithoutCancel(conn.Statement.Context), migrationLockTimeout)
+	defer cancel()
+	if err := conn.WithContext(lockCtx).Raw("SELECT GET_LOCK(?, ?)", migrationLockName, migrationLockWaitSeconds).Scan(&acquired).Error; err != nil {
+		// MySQL may have acquired the session lock before a client-side
+		// cancellation/error was observed. Do not leave that lock behind.
+		_ = releaseMigrationLock(conn)
+		return false, fmt.Errorf("acquire migration advisory lock %q: %w", migrationLockName, err)
+	}
+	return acquired == 1, nil
+}
+
+func releaseMigrationLock(conn *gorm.DB) error {
+	var released int
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(conn.Statement.Context), migrationLockTimeout)
+	defer cancel()
+	if err := conn.WithContext(releaseCtx).Raw("SELECT RELEASE_LOCK(?)", migrationLockName).Scan(&released).Error; err != nil {
+		return fmt.Errorf("release migration advisory lock %q: %w", migrationLockName, err)
+	}
+	if released != 1 {
+		return fmt.Errorf("release migration advisory lock %q returned %d", migrationLockName, released)
+	}
+	return nil
 }
 
 // splitStatements is intentionally limited to the checked-in migration format:

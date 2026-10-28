@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestMigrationLockNameIsStableAndMySQLCompatible(t *testing.T) {
+	if migrationLockName != "aegis_gateway:versioned_migrations" {
+		t.Fatalf("migration lock name changed to %q", migrationLockName)
+	}
+	if migrationLockName == "" || len(migrationLockName) > 64 {
+		t.Fatalf("migration lock name length %d is outside MySQL's 1..64 range", len(migrationLockName))
+	}
+	if migrationLockWaitSeconds <= 0 {
+		t.Fatal("migration lock wait must be bounded and positive")
+	}
+}
+
 func TestSplitStatementsKeepsDynamicMigrationStatements(t *testing.T) {
 	source, err := files.ReadFile("003_api_key_accounting.sql")
 	if err != nil {
@@ -37,6 +49,53 @@ func TestFreshBaselineContainsApiKeyAccountingColumns(t *testing.T) {
 	}
 	if strings.Contains(strings.ToUpper(string(baseline)), "USE AEGIS") {
 		t.Fatal("migration must not change the database selected by MYSQL_DSN")
+	}
+}
+
+func TestBaselineCreateTablesAreIdempotent(t *testing.T) {
+	baseline, err := files.ReadFile("001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIdempotentCreateTables(t, "001_init.sql", string(baseline))
+}
+
+func TestEmbeddedMigrationsHaveNoNonIdempotentCreateTables(t *testing.T) {
+	entries, err := files.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		source, err := files.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertIdempotentCreateTables(t, entry.Name(), string(source))
+	}
+}
+
+func assertIdempotentCreateTables(t *testing.T, name, source string) {
+	t.Helper()
+	upper := strings.ToUpper(source)
+	for offset := 0; ; {
+		relative := upper[offset:]
+		start := strings.Index(relative, "CREATE TABLE")
+		if start < 0 {
+			return
+		}
+		start += offset
+		remainder := strings.TrimSpace(upper[start+len("CREATE TABLE"):])
+		if !strings.HasPrefix(remainder, "IF NOT EXISTS") {
+			end := start + 40
+			if end > len(source) {
+				end = len(source)
+			}
+			t.Fatalf("%s contains non-idempotent CREATE TABLE near %q", name, source[start:end])
+		}
+		offset = start + len("CREATE TABLE")
 	}
 }
 

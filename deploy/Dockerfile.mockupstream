@@ -1,7 +1,16 @@
-# Mock 上游运行时镜像（离线构建，演示沙箱用）。
+# Mock 上游运行时镜像：在 Docker build context 内编译 Linux 二进制。
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
+
+COPY backend/go.mod backend/go.sum ./backend/
+RUN cd backend && go mod download
+COPY backend/ ./backend/
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags='-s -w' -o /out/mockupstream ./cmd/mockupstream
+
 FROM alpine:3.20
 RUN adduser -D -u 10001 app
-COPY backend/bin/mockupstream-linux /usr/local/bin/mockupstream
+COPY --from=builder /out/mockupstream /usr/local/bin/mockupstream
 USER app
 EXPOSE 8099
 ENTRYPOINT ["mockupstream"]

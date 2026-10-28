@@ -5,11 +5,48 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+const MaxOutputTokens = 32768
+
+// EnforceOutputCap makes the provider request obey the gateway hard output cap.
+// A client request above the cap is rejected rather than silently under-reserved.
+func EnforceOutputCap(body []byte) ([]byte, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
+		return nil, fmt.Errorf("invalid JSON request")
+	}
+	seen := false
+	for _, field := range []string{"max_completion_tokens", "max_tokens"} {
+		raw, ok := payload[field]
+		if !ok {
+			continue
+		}
+		value, err := strconv.ParseInt(string(raw), 10, 64)
+		if err != nil || value <= 0 {
+			return nil, fmt.Errorf("%s must be a positive integer", field)
+		}
+		if value > MaxOutputTokens {
+			return nil, fmt.Errorf("%s exceeds maximum of %d", field, MaxOutputTokens)
+		}
+		seen = true
+	}
+	if !seen {
+		encoded, _ := json.Marshal(MaxOutputTokens)
+		payload["max_tokens"] = encoded
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 // Usage OpenAI 协议 usage 字段（用于计费）。
 type Usage struct {
