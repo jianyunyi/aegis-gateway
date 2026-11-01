@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -21,11 +20,10 @@ import (
 )
 
 const (
-	loginIPLimit       = 10
-	loginUserIPLimit   = 5
-	loginUsernameLimit = 30
-	loginWindow        = 5 * time.Minute
-	defaultLoginTime   = 500 * time.Millisecond
+	loginIPLimit     = 10
+	loginUserIPLimit = 5
+	loginWindow      = 5 * time.Minute
+	defaultLoginTime = 500 * time.Millisecond
 )
 
 // One script updates every applicable dimension in one Redis transaction. The
@@ -48,19 +46,6 @@ func loginKey(prefix, value string) string {
 	return prefix + hex.EncodeToString(digest[:])
 }
 
-func requestIP(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	// Deliberately ignore X-Forwarded-For and X-Real-IP. RemoteAddr is the
-	// peer directly connected to this process and cannot be supplied by the
-	// request body or headers.
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
-
 func normalizedLoginUsername(body []byte) (string, bool) {
 	var payload struct {
 		Username string `json:"username"`
@@ -75,9 +60,10 @@ func normalizedLoginUsername(body []byte) (string, bool) {
 	return username, true
 }
 
-// LoginRateLimit allows at most ten login attempts per client IP, five
-// attempts per IP and normalized username, and thirty attempts per normalized
-// username globally, all within five minutes. Redis errors fail closed.
+// LoginRateLimit allows at most ten login attempts per client IP and five
+// attempts per IP and normalized username within five minutes. It deliberately
+// avoids a global username bucket so remote attackers cannot lock out an
+// account by rotating source IPs. Redis errors fail closed.
 func LoginRateLimit(repo *repository.Repository, timeout time.Duration) gin.HandlerFunc {
 	if timeout <= 0 {
 		timeout = defaultLoginTime
@@ -90,15 +76,14 @@ func LoginRateLimit(repo *repository.Repository, timeout time.Duration) gin.Hand
 			body = nil
 		}
 
-		ip := requestIP(c.Request)
+		ip := c.ClientIP()
 		keys := []string{loginKey("auth:login:ip:", ip)}
 		limits := []int{loginIPLimit}
 		if username, ok := normalizedLoginUsername(body); ok {
 			keys = append(keys,
 				loginKey("auth:login:ip-user:", ip+"\x00"+username),
-				loginKey("auth:login:user:", username),
 			)
-			limits = append(limits, loginUserIPLimit, loginUsernameLimit)
+			limits = append(limits, loginUserIPLimit)
 		}
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)

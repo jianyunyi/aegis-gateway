@@ -19,6 +19,10 @@ import (
 func loginTestHandler(t *testing.T, client *redis.Client) http.Handler {
 	t.Helper()
 	r := gin.New()
+	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
+	if err := r.SetTrustedProxies(nil); err != nil {
+		t.Fatal(err)
+	}
 	r.POST("/login", LoginRateLimit(&repository.Repository{Redis: client}, time.Second), func(c *gin.Context) {
 		var payload struct {
 			Username string `json:"username"`
@@ -51,10 +55,19 @@ func loginRequest(t *testing.T, serverURL, username string) int {
 
 func loginRequestFromIP(t *testing.T, handler http.Handler, username, remoteAddr string, forwardedFor ...string) int {
 	t.Helper()
+	headers := make(map[string]string)
+	if len(forwardedFor) > 0 {
+		headers["X-Forwarded-For"] = forwardedFor[0]
+	}
+	return loginRequestWithHeaders(t, handler, username, remoteAddr, headers)
+}
+
+func loginRequestWithHeaders(t *testing.T, handler http.Handler, username, remoteAddr string, headers map[string]string) int {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(fmt.Sprintf(`{"username":%q,"password":"x"}`, username)))
 	req.Header.Set("Content-Type", "application/json")
-	if len(forwardedFor) > 0 {
-		req.Header.Set("X-Forwarded-For", forwardedFor[0])
+	for name, value := range headers {
+		req.Header.Set(name, value)
 	}
 	req.RemoteAddr = remoteAddr
 	resp := httptest.NewRecorder()
@@ -94,23 +107,38 @@ func TestLoginRateLimitDimensionsAndBodyRestore(t *testing.T) {
 	if got := loginRequest(t, server.URL, "user-final"); got != http.StatusTooManyRequests {
 		t.Fatalf("IP limit: got %d", got)
 	}
+}
 
+func TestLoginRateLimitDoesNotGloballyLockOutUsername(t *testing.T) {
+	addr := os.Getenv("TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Fatal("TEST_REDIS_ADDR required")
+	}
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	defer client.Close()
 	if err := client.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatal(err)
 	}
 	handler := loginTestHandler(t, client)
-	for i := 0; i < loginUsernameLimit; i++ {
+	for i := 0; i < 35; i++ {
 		ip := fmt.Sprintf("198.51.100.%d:4321", i+1)
-		if got := loginRequestFromIP(t, handler, " GLOBAL ", ip); got != http.StatusOK {
-			t.Fatalf("global username attempt %d: got %d", i+1, got)
+		if got := loginRequestFromIP(t, handler, " targeted-user ", ip); got != http.StatusOK {
+			t.Fatalf("distributed username attempt %d: got %d", i+1, got)
 		}
 	}
-	if got := loginRequestFromIP(t, handler, "global", "203.0.113.1:4321"); got != http.StatusTooManyRequests {
-		t.Fatalf("global username limit: got %d", got)
+
+	// The same IP is still bounded by the per-IP+username bucket.
+	for i := 0; i < loginUserIPLimit; i++ {
+		if got := loginRequestFromIP(t, handler, "targeted-user", "203.0.113.1:4321"); got != http.StatusOK {
+			t.Fatalf("per-IP username attempt %d: got %d", i+1, got)
+		}
+	}
+	if got := loginRequestFromIP(t, handler, "targeted-user", "203.0.113.1:4321"); got != http.StatusTooManyRequests {
+		t.Fatalf("per-IP username limit: got %d", got)
 	}
 }
 
-func TestLoginRateLimitIgnoresUntrustedForwardedIP(t *testing.T) {
+func TestLoginRateLimitIgnoresForwardedIPFromUntrustedPeer(t *testing.T) {
 	addr := os.Getenv("TEST_REDIS_ADDR")
 	if addr == "" {
 		t.Fatal("TEST_REDIS_ADDR required")
@@ -129,6 +157,73 @@ func TestLoginRateLimitIgnoresUntrustedForwardedIP(t *testing.T) {
 	}
 	if got := loginRequestFromIP(t, handler, "proxy-shared", "203.0.113.9:4321", "198.51.100.200"); got != http.StatusTooManyRequests {
 		t.Fatalf("spoofed forwarding headers bypassed source-IP limit: got %d", got)
+	}
+}
+
+func TestLoginRateLimitSeparatesClientsBehindTrustedProxy(t *testing.T) {
+	addr := os.Getenv("TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Fatal("TEST_REDIS_ADDR required")
+	}
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	defer client.Close()
+	if err := client.FlushDB(t.Context()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
+	if err := r.SetTrustedProxies([]string{"198.51.100.0/24"}); err != nil {
+		t.Fatal(err)
+	}
+	r.POST("/login", LoginRateLimit(&repository.Repository{Redis: client}, time.Second), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+	handler := http.Handler(r)
+
+	for i := 0; i < loginUserIPLimit; i++ {
+		if got := loginRequestFromIP(t, handler, "shared-account", "198.51.100.10:4321", "203.0.113.1"); got != http.StatusOK {
+			t.Fatalf("first client attempt %d: got %d", i+1, got)
+		}
+		if got := loginRequestFromIP(t, handler, "shared-account", "198.51.100.10:4321", "203.0.113.2"); got != http.StatusOK {
+			t.Fatalf("second client attempt %d: got %d", i+1, got)
+		}
+	}
+	if got := loginRequestFromIP(t, handler, "shared-account", "198.51.100.10:4321", "203.0.113.1"); got != http.StatusTooManyRequests {
+		t.Fatalf("first client should hit its own IP+username limit: got %d", got)
+	}
+	if got := loginRequestFromIP(t, handler, "shared-account", "198.51.100.10:4321", "203.0.113.2"); got != http.StatusTooManyRequests {
+		t.Fatalf("second client should hit its own IP+username limit: got %d", got)
+	}
+}
+
+func TestLoginRateLimitIgnoresXRealIPEvenFromTrustedProxy(t *testing.T) {
+	addr := os.Getenv("TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Fatal("TEST_REDIS_ADDR required")
+	}
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	defer client.Close()
+	if err := client.FlushDB(t.Context()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
+	if err := r.SetTrustedProxies([]string{"198.51.100.0/24"}); err != nil {
+		t.Fatal(err)
+	}
+	r.POST("/login", LoginRateLimit(&repository.Repository{Redis: client}, time.Second), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+	handler := http.Handler(r)
+
+	for i := 0; i < loginUserIPLimit; i++ {
+		realIP := fmt.Sprintf("203.0.113.%d", i+1)
+		if got := loginRequestWithHeaders(t, handler, "shared-account", "198.51.100.10:4321", map[string]string{"X-Real-IP": realIP}); got != http.StatusOK {
+			t.Fatalf("attempt %d with X-Real-IP %s: got %d", i+1, realIP, got)
+		}
+	}
+	if got := loginRequestWithHeaders(t, handler, "shared-account", "198.51.100.10:4321", map[string]string{"X-Real-IP": "203.0.113.200"}); got != http.StatusTooManyRequests {
+		t.Fatalf("X-Real-IP must not split the trusted proxy's source bucket: got %d", got)
 	}
 }
 
@@ -161,6 +256,9 @@ func TestLoginRateLimitSharedAcrossInstancesAndHashedKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, key := range keys {
+		if strings.HasPrefix(key, "auth:login:user:") {
+			t.Fatalf("unexpected global username lockout key %q", key)
+		}
 		if strings.Contains(key, "shared") || strings.Contains(key, "127.0.0.1") {
 			t.Fatalf("plaintext identity in key %q", key)
 		}

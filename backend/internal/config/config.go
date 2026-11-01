@@ -3,6 +3,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -31,6 +33,7 @@ type Config struct {
 	CacheTTL            time.Duration // 请求缓存 TTL
 	RateLimitFailOpen   bool
 	RateLimitTimeout    time.Duration
+	TrustedProxyCIDRs   []string
 	ReadinessTimeout    time.Duration
 	MaxRequestBodyBytes int64
 	CORSAllowedOrigins  []string
@@ -67,6 +70,7 @@ func Load() *Config {
 		CacheTTL:            getSeconds("CACHE_TTL_SECONDS", 600),
 		RateLimitFailOpen:   getBool("RATE_LIMIT_FAIL_OPEN", false),
 		RateLimitTimeout:    getDuration("RATE_LIMIT_TIMEOUT_MS", 500, time.Millisecond, false),
+		TrustedProxyCIDRs:   getCSV("TRUSTED_PROXY_CIDRS"),
 		ReadinessTimeout:    getDuration("READINESS_TIMEOUT_MS", 1000, time.Millisecond, false),
 		MaxRequestBodyBytes: int64(getInt("MAX_REQUEST_BODY_BYTES", defaultMaxRequestBodyBytes, 1024, 16<<20)),
 		CORSAllowedOrigins:  origins,
@@ -80,6 +84,16 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxRequestBodyBytes < 1024 || c.MaxRequestBodyBytes > 16<<20 {
 		return errors.New("MAX_REQUEST_BODY_BYTES must be between 1024 and 16777216")
+	}
+	for _, cidr := range c.TrustedProxyCIDRs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q must be a valid CIDR", cidr)
+		}
+		prefix, _ := network.Mask.Size()
+		if prefix == 0 {
+			return errors.New("TRUSTED_PROXY_CIDRS must not trust all IP addresses")
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Env)) {
 	case "dev", "development", "test":

@@ -39,6 +39,26 @@ func TestDurationUnitsAndDisable(t *testing.T) {
 	}
 }
 
+func TestTrustedProxyCIDRsRequireValidNarrowCIDRs(t *testing.T) {
+	t.Setenv("APP_ENV", "dev")
+	t.Setenv("MYSQL_DSN", "aegis:local@tcp(mysql:3306)/aegis")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.1.4/32, 2001:db8::1/128")
+	cfg := Load()
+	if len(cfg.TrustedProxyCIDRs) != 2 || cfg.TrustedProxyCIDRs[0] != "10.0.1.4/32" {
+		t.Fatalf("trusted proxy CIDRs were not loaded: %v", cfg.TrustedProxyCIDRs)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid proxy CIDRs rejected: %v", err)
+	}
+
+	for _, invalid := range []string{"10.0.1.4", "not-a-cidr", "0.0.0.0/0", "::/0"} {
+		t.Setenv("TRUSTED_PROXY_CIDRS", invalid)
+		if err := Load().Validate(); err == nil {
+			t.Errorf("unsafe trusted proxy CIDR %q was accepted", invalid)
+		}
+	}
+}
+
 func TestPrivacyCollectionIsOptIn(t *testing.T) {
 	t.Setenv("APP_ENV", "dev")
 	t.Setenv("PROMPT_CAPTURE_ENABLED", "")
