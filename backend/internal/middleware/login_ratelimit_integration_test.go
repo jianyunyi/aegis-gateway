@@ -16,6 +16,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// Keep this package's FLUSHDB-based login tests away from other CI packages.
+const loginRateLimitTestRedisDB = 1
+
 func loginTestHandler(t *testing.T, client *redis.Client) http.Handler {
 	t.Helper()
 	r := gin.New()
@@ -80,7 +83,7 @@ func TestLoginRateLimitDimensionsAndBodyRestore(t *testing.T) {
 	if addr == "" {
 		t.Fatal("TEST_REDIS_ADDR required")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: loginRateLimitTestRedisDB})
 	defer client.Close()
 	if err := client.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatal(err)
@@ -114,7 +117,7 @@ func TestLoginRateLimitDoesNotGloballyLockOutUsername(t *testing.T) {
 	if addr == "" {
 		t.Fatal("TEST_REDIS_ADDR required")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: loginRateLimitTestRedisDB})
 	defer client.Close()
 	if err := client.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatal(err)
@@ -143,7 +146,7 @@ func TestLoginRateLimitIgnoresForwardedIPFromUntrustedPeer(t *testing.T) {
 	if addr == "" {
 		t.Fatal("TEST_REDIS_ADDR required")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: loginRateLimitTestRedisDB})
 	defer client.Close()
 	if err := client.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatal(err)
@@ -165,7 +168,7 @@ func TestLoginRateLimitSeparatesClientsBehindTrustedProxy(t *testing.T) {
 	if addr == "" {
 		t.Fatal("TEST_REDIS_ADDR required")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: loginRateLimitTestRedisDB})
 	defer client.Close()
 	if err := client.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatal(err)
@@ -201,7 +204,7 @@ func TestLoginRateLimitIgnoresXRealIPEvenFromTrustedProxy(t *testing.T) {
 	if addr == "" {
 		t.Fatal("TEST_REDIS_ADDR required")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: loginRateLimitTestRedisDB})
 	defer client.Close()
 	if err := client.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatal(err)
@@ -232,7 +235,7 @@ func TestLoginRateLimitSharedAcrossInstancesAndHashedKeys(t *testing.T) {
 	if addr == "" {
 		t.Fatal("TEST_REDIS_ADDR required")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: loginRateLimitTestRedisDB})
 	defer client.Close()
 	if err := client.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatal(err)
