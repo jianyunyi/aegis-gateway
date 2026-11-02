@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
+	"aegis-gateway/internal/service"
 )
 
 // CreateEvalDataset 创建评测数据集。
@@ -60,16 +64,45 @@ func ListEvalSamples(d *Deps) gin.HandlerFunc {
 func AddEvalSample(d *Deps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			DatasetID uint64 `json:"dataset_id"`
-			Prompt    string `json:"prompt"`
-			Reference string `json:"reference"`
+			DatasetID                      uint64 `json:"dataset_id"`
+			Prompt                         string `json:"prompt"`
+			Reference                      string `json:"reference"`
+			ConfirmSyntheticOrDeidentified bool   `json:"confirm_synthetic_or_deidentified"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil || req.DatasetID == 0 || req.Prompt == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "dataset_id 与 prompt 必填", "data": nil})
 			return
 		}
-		if err := d.Eval.AddSample(req.DatasetID, req.Prompt, req.Reference, "manual"); err != nil {
+		if !req.ConfirmSyntheticOrDeidentified {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 40002, "message": "仅允许合成或彻底去标识数据；请先确认", "data": nil})
+			return
+		}
+		if err := d.Eval.AddManualSample(req.DatasetID, req.Prompt, req.Reference, req.ConfirmSyntheticOrDeidentified); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "添加失败", "data": nil})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": nil})
+	}
+}
+
+// DeleteEvalSample 删除单条样本，并清除已保存报告中对应的文本。
+func DeleteEvalSample(d *Deps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil || id == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 40001, "message": "id 无效", "data": nil})
+			return
+		}
+		if err := d.Eval.DeleteSampleFromAdmin(id); err != nil {
+			if errors.Is(err, service.ErrLegacySampleRequiresRehearsal) {
+				c.JSON(http.StatusConflict, gin.H{"code": 40901, "message": "旧样本须先在隔离环境完成盘点和备份，再通过逐 ID 清理工具删除", "data": nil})
+				return
+			}
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"code": 40401, "message": "评测样本不存在", "data": nil})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 50001, "message": "删除失败", "data": nil})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": nil})

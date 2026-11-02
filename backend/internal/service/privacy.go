@@ -10,13 +10,15 @@ import (
 	"aegis-gateway/internal/repository"
 )
 
-// CleanupExpiredPromptData removes prompt-bearing usage fields, sampled eval
-// samples, and reports after the configured retention period.
+// CleanupExpiredPromptData removes prompt-bearing usage fields, explicitly
+// expired evaluation samples, and old reports. Legacy samples with a NULL
+// expires_at are intentionally left for an operator-led review.
 func CleanupExpiredPromptData(ctx context.Context, repo *repository.Repository, retentionDays int) (int64, error) {
 	if retentionDays < 1 {
 		return 0, fmt.Errorf("prompt retention must be at least one day")
 	}
-	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	now := time.Now().UTC()
+	cutoff := now.Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	var removed int64
 
 	result := repo.DB.WithContext(ctx).Model(&model.UsageLog{}).
@@ -27,13 +29,21 @@ func CleanupExpiredPromptData(ctx context.Context, repo *repository.Repository, 
 	}
 	removed += result.RowsAffected
 
-	result = repo.DB.WithContext(ctx).Where("created_at < ?", cutoff).Delete(&model.EvalRun{})
-	if result.Error != nil {
-		return removed, result.Error
+	var samples []model.EvalSample
+	if err := repo.DB.WithContext(ctx).
+		Where("expires_at IS NOT NULL AND expires_at <= ?", now).
+		Order("id ASC").Find(&samples).Error; err != nil {
+		return removed, err
 	}
-	removed += result.RowsAffected
+	evals := &EvalService{repo: repo}
+	for _, sample := range samples {
+		if err := evals.DeleteSampleContext(ctx, sample.ID); err != nil {
+			return removed, fmt.Errorf("expire evaluation sample %d: %w", sample.ID, err)
+		}
+		removed++
+	}
 
-	result = repo.DB.WithContext(ctx).Where("created_at < ? AND source LIKE 'sampled%'", cutoff).Delete(&model.EvalSample{})
+	result = repo.DB.WithContext(ctx).Where("created_at < ?", cutoff).Delete(&model.EvalRun{})
 	if result.Error != nil {
 		return removed, result.Error
 	}

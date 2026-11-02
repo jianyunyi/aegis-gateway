@@ -93,6 +93,7 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 			authed.GET("/evals/datasets/:id/samples", handler.ListEvalSamples(d))
 			authed.POST("/evals/datasets/:id/sample", handler.SampleEval(d))
 			authed.POST("/evals/samples", handler.AddEvalSample(d))
+			authed.DELETE("/evals/samples/:id", handler.DeleteEvalSample(d))
 			authed.POST("/evals/samples/:id/label", handler.LabelEvalSample(d))
 			authed.GET("/evals/runs", handler.ListEvalRuns(d))
 			authed.POST("/evals/runs", handler.RunEval(d))

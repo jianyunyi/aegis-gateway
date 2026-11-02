@@ -86,6 +86,19 @@ jobs:
           ! grep -Eq '(^|_)(PASSWORD|SECRET|DSN)=' .env
       - name: Validate Compose configuration
         run: docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
+      - name: Validate VPN-only admin overlay and acceptance scripts
+        run: |
+          TS_AUTHKEY=ci-placeholder docker compose --env-file .env \
+            -f deploy/docker-compose.yml \
+            -f deploy/docker-compose.admin-vpn.yml config --quiet
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          serve = json.loads(Path('deploy/admin-vpn/serve.json').read_text(encoding='utf-8'))
+          assert serve['AllowFunnel']['${TS_CERT_DOMAIN}:443'] is False
+          assert serve['Web']['${TS_CERT_DOMAIN}:443']['Handlers']['/']['Proxy'] == 'http://127.0.0.1:3000'
+          PY
+          bash -n scripts/verify-admin-access.sh scripts/verify-gateway-rollback.sh scripts/db-rehearsal.sh scripts/eval-samples.sh
       - name: Assert production privacy configuration
         run: |
           docker compose --env-file .env -f deploy/docker-compose.yml config --format json > /tmp/aegis-compose.json

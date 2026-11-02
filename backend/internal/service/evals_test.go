@@ -398,6 +398,11 @@ func TestSampleFromLogsUsesFullMessagesAndAvoidsTruncatedLegacyPreview(t *testin
 	}
 	foundFull, foundLegacy := false, false
 	for _, sample := range samples {
+		if sample.Source == "sampled" || sample.Source == "sampled_legacy" {
+			if sample.ExpiresAt == nil || sample.ExpiresAt.Sub(sample.CreatedAt) < EvalSampleRetention-time.Second || sample.ExpiresAt.Sub(sample.CreatedAt) > EvalSampleRetention+time.Second {
+				t.Fatalf("new sampled row lacks the explicit 30-day expiry: %+v", sample)
+			}
+		}
 		if sample.Prompt == longPrompt {
 			foundFull = sample.Source == "sampled" && sample.ChatMessages == string(fullMessages)
 		}
