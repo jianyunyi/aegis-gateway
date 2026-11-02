@@ -7,6 +7,12 @@ if [ -e "$ENV_FILE" ] || [ -e "$SECRETS_DIR" ]; then
   echo "Refusing to overwrite existing $ENV_FILE or $SECRETS_DIR" >&2
   exit 1
 fi
+APP_UID=$(id -u)
+APP_GID=$(id -g)
+if [ "$APP_UID" -eq 0 ] || [ "$APP_GID" -eq 0 ]; then
+  echo "Refusing to initialize Compose as root or with the root group; run this script as a non-root user." >&2
+  exit 1
+fi
 if ! command -v openssl >/dev/null 2>&1; then
   echo "openssl is required to generate random secrets" >&2
   exit 1
@@ -45,8 +51,8 @@ chmod 700 "$secrets_tmp"
 cat > "$env_tmp" <<EOF
 MYSQL_USER=aegis
 SECRETS_DIR=../.secrets
-APP_UID=$(id -u)
-APP_GID=$(id -g)
+APP_UID=$APP_UID
+APP_GID=$APP_GID
 SEED_DATA=true
 BOOTSTRAP_ADMIN_USERNAME=admin
 PROMPT_CAPTURE_ENABLED=false
