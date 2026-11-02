@@ -39,9 +39,10 @@ func New(cfg *config.Config, repo *repository.Repository) *gin.Engine {
 	}
 
 	r := gin.New()
-	if err := r.SetTrustedProxies(nil); err != nil {
+	if err := r.SetTrustedProxies(cfg.TrustedProxyCIDRs); err != nil {
 		panic(err)
 	}
+	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
 	r.Use(gin.Recovery())
 	r.Use(middleware.CORS(cfg.CORSAllowedOrigins))
 	r.Use(middleware.RequestID())

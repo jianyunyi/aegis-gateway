@@ -29,7 +29,7 @@
 
 # 2. Build the Go binaries, then start MySQL + Redis + SQL migration + Gateway + mock + Admin UI
 make build-linux
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 
 # 3. Health check
 curl http://localhost:8081/healthz
@@ -39,18 +39,21 @@ curl http://localhost:8081/readyz
 open http://localhost:3000
 ```
 
-> All host ports bind to `127.0.0.1`: Gateway `8081`, Admin UI `3000`, MySQL `3303`, Redis `6380`, mock sandbox `8099`. Put a trusted HTTPS reverse proxy in front before exposing any service publicly; do not publish the Compose HTTP ports directly.
+> Compose credentials live in `.secrets/` and are mounted read-only; `.env` contains only non-secret settings. The secret directory is mode `0700`, credential files are mode `0600`, and the Redis config is mode `0644` only inside that private directory so the non-root Redis process can read it. All host ports bind to `127.0.0.1`: Gateway `8081`, Admin UI `3000`, MySQL `3303`, Redis `6380`, mock sandbox `8099`. Put a trusted HTTPS reverse proxy in front before exposing any service publicly; do not publish the Compose HTTP ports directly.
 > Building the web image requires network access (`npm ci`, uses npmmirror registry); offline? Run the UI locally with `npm run dev`.
 
 Local development (without Docker):
 
 ```bash
-./scripts/init-compose-env.sh                                    # once, if .env does not exist
-docker compose -f deploy/docker-compose.yml up -d mysql redis    # dependencies only
+./scripts/init-compose-env.sh                                    # once, if .env/.secrets do not exist
+docker compose --env-file .env -f deploy/docker-compose.yml up -d mysql redis
 set -a && . ./.env && set +a
 export APP_ENV=dev AUTO_MIGRATE=true
-export MYSQL_DSN="${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(127.0.0.1:3303)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+export MYSQL_DSN_FILE="$PWD/.secrets/mysql_dsn_host"
 export REDIS_ADDR=127.0.0.1:6380
+export REDIS_PASSWORD_FILE="$PWD/.secrets/redis_password"
+export JWT_SECRET_FILE="$PWD/.secrets/jwt_secret"
+export BOOTSTRAP_ADMIN_PASSWORD_FILE="$PWD/.secrets/bootstrap_admin_password"
 (cd backend && go run ./cmd/gateway)                                # gateway on :8081
 (cd web && npm install && npm run dev)                              # admin UI on :3000
 ```

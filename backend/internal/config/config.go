@@ -3,6 +3,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -31,6 +33,7 @@ type Config struct {
 	CacheTTL            time.Duration // 请求缓存 TTL
 	RateLimitFailOpen   bool
 	RateLimitTimeout    time.Duration
+	TrustedProxyCIDRs   []string
 	ReadinessTimeout    time.Duration
 	MaxRequestBodyBytes int64
 	CORSAllowedOrigins  []string
@@ -51,22 +54,23 @@ func Load() *Config {
 	return &Config{
 		Env:                 env,
 		HTTPAddr:            getEnv("HTTP_ADDR", ":8081"),
-		MySQLDSN:            getEnv("MYSQL_DSN", ""),
+		MySQLDSN:            getSecretEnv("MYSQL_DSN", ""),
 		RedisAddr:           getEnv("REDIS_ADDR", "127.0.0.1:6379"),
-		RedisPass:           getEnv("REDIS_PASSWORD", ""),
+		RedisPass:           getSecretEnv("REDIS_PASSWORD", ""),
 		AutoMigrate:         getBool("AUTO_MIGRATE", dev),
-		JWTSecret:           getEnv("JWT_SECRET", jwtDefault),
+		JWTSecret:           getSecretEnv("JWT_SECRET", jwtDefault),
 		JWTExpire:           getDuration("JWT_EXPIRE_MINUTES", 12*60, time.Minute, false),
 		UpstreamTimeout:     getDuration("UPSTREAM_TIMEOUT_SECONDS", 180, time.Second, false),
 		SeedData:            getBool("SEED_DATA", false),
 		BootstrapAdminUser:  getEnv("BOOTSTRAP_ADMIN_USERNAME", ""),
-		BootstrapAdminPass:  getEnv("BOOTSTRAP_ADMIN_PASSWORD", ""),
+		BootstrapAdminPass:  getSecretEnv("BOOTSTRAP_ADMIN_PASSWORD", ""),
 		CapturePrompts:      getBool("PROMPT_CAPTURE_ENABLED", false),
 		PromptRetentionDays: getInt("PROMPT_RETENTION_DAYS", 30, 1, 3650),
 		BillingInterval:     getDuration("BILLING_INTERVAL_MINUTES", 5, time.Minute, true),
 		CacheTTL:            getSeconds("CACHE_TTL_SECONDS", 600),
 		RateLimitFailOpen:   getBool("RATE_LIMIT_FAIL_OPEN", false),
 		RateLimitTimeout:    getDuration("RATE_LIMIT_TIMEOUT_MS", 500, time.Millisecond, false),
+		TrustedProxyCIDRs:   getCSV("TRUSTED_PROXY_CIDRS"),
 		ReadinessTimeout:    getDuration("READINESS_TIMEOUT_MS", 1000, time.Millisecond, false),
 		MaxRequestBodyBytes: int64(getInt("MAX_REQUEST_BODY_BYTES", defaultMaxRequestBodyBytes, 1024, 16<<20)),
 		CORSAllowedOrigins:  origins,
@@ -80,6 +84,16 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxRequestBodyBytes < 1024 || c.MaxRequestBodyBytes > 16<<20 {
 		return errors.New("MAX_REQUEST_BODY_BYTES must be between 1024 and 16777216")
+	}
+	for _, cidr := range c.TrustedProxyCIDRs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q must be a valid CIDR", cidr)
+		}
+		prefix, _ := network.Mask.Size()
+		if prefix == 0 {
+			return errors.New("TRUSTED_PROXY_CIDRS must not trust all IP addresses")
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Env)) {
 	case "dev", "development", "test":
@@ -147,6 +161,20 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// getSecretEnv reads a secret from KEY_FILE when configured, otherwise from KEY.
+// A configured but unreadable secret file fails closed rather than falling back
+// to an environment value that may be stale or unexpectedly exposed.
+func getSecretEnv(key, fallback string) string {
+	if path := os.Getenv(key + "_FILE"); path != "" {
+		value, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimRight(string(value), "\r\n")
+	}
+	return getEnv(key, fallback)
 }
 
 func getBool(key string, def bool) bool {

@@ -31,7 +31,7 @@
 
 # 2. 构建 Go 二进制，再启动 MySQL + Redis + SQL 迁移 + 网关 + mock + 管理后台
 make build-linux
-docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 
 # 3. 健康检查
 curl http://localhost:8081/healthz
@@ -41,23 +41,26 @@ curl http://localhost:8081/readyz  # LB readiness：检查 MySQL + Redis
 open http://localhost:3000
 ```
 
-> 所有宿主机端口只绑定 `127.0.0.1`：网关 `8081`、后台 `3000`、MySQL `3303`、Redis `6380`、mock 沙箱 `8099`。对公网提供服务前，必须在受信任的 HTTPS 反向代理后发布；不要直接暴露 Compose 的 HTTP 端口。
+> Compose 密钥保存在权限 0700 的 `.secrets/` 目录并由 Compose 只读挂载；凭据文件为 0600，Redis 配置文件因容器内以非 root 身份读取而为 0644，但目录仍阻止宿主机其他用户访问。`.env` 只含非敏感配置。所有宿主机端口只绑定 `127.0.0.1`：网关 `8081`、后台 `3000`、MySQL `3303`、Redis `6380`、mock 沙箱 `8099`。对公网提供服务前，必须在受信任的 HTTPS 反向代理后发布；不要直接暴露 Compose 的 HTTP 端口。
 > web 镜像构建需要网络（npm ci，走 npmmirror）；无网络时用 `npm run dev` 本地起后台。
 
 本地开发（不经 Docker）：
 
 ```bash
-./scripts/init-compose-env.sh                                    # 若尚未生成 .env
-docker compose -f deploy/docker-compose.yml up -d mysql redis    # 只起依赖
+./scripts/init-compose-env.sh                                    # 若尚未生成 .env/.secrets
+docker compose --env-file .env -f deploy/docker-compose.yml up -d mysql redis
 set -a && . ./.env && set +a
 export APP_ENV=dev AUTO_MIGRATE=true
-export MYSQL_DSN="${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(127.0.0.1:3303)/aegis?charset=utf8mb4&parseTime=True&loc=Local"
+export MYSQL_DSN_FILE="$PWD/.secrets/mysql_dsn_host"
 export REDIS_ADDR=127.0.0.1:6380
+export REDIS_PASSWORD_FILE="$PWD/.secrets/redis_password"
+export JWT_SECRET_FILE="$PWD/.secrets/jwt_secret"
+export BOOTSTRAP_ADMIN_PASSWORD_FILE="$PWD/.secrets/bootstrap_admin_password"
 (cd backend && go run ./cmd/gateway)                                # 起网关
 (cd web && npm install && npm run dev)                              # 起后台
 ```
 
-Windows 无 make 时的命令对照：`make up` → `docker compose -f deploy/docker-compose.yml up -d --build`；`make test` → `cd backend; go test ./... -race`。
+Windows 无 make 时的命令对照：`make up` → `docker compose --env-file .env -f deploy/docker-compose.yml up -d --build`；`make test` → `cd backend; go test ./... -race`。
 
 ## 功能特性
 
