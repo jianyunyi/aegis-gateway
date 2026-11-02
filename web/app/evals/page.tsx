@@ -13,6 +13,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Drawer,
@@ -21,6 +22,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Skeleton,
@@ -29,6 +31,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -43,7 +46,7 @@ import type { ColumnsType } from 'antd/es/table';
 import SideLayout from '@/components/SideLayout';
 import ErrorState from '@/components/ErrorState';
 import TableSkeleton from '@/components/TableSkeleton';
-import { get, post } from '@/lib/api';
+import { del, get, post } from '@/lib/api';
 import type {
   EvalDataset,
   EvalReportSummary,
@@ -174,6 +177,7 @@ export default function EvalsPage() {
       dataset_id: selectedId,
       prompt: v.prompt,
       reference: v.reference ?? '',
+      confirm_synthetic_or_deidentified: v.confirm_synthetic_or_deidentified === true,
     });
     message.success('样本已添加');
     setAddSampleOpen(false);
@@ -183,6 +187,12 @@ export default function EvalsPage() {
 
   const handleLabel = async (sampleId: number, label: number) => {
     await post(`/evals/samples/${sampleId}/label`, { label });
+    if (selectedId != null) await loadDetail(selectedId);
+  };
+
+  const handleDeleteSample = async (sampleId: number) => {
+    await del(`/evals/samples/${sampleId}`);
+    message.success(`样本 #${sampleId} 已删除，已保存报告中的对应文本已清除`);
     if (selectedId != null) await loadDetail(selectedId);
   };
 
@@ -299,6 +309,13 @@ export default function EvalsPage() {
         v === 'sampled' ? <Tag color="blue">完整采样</Tag> : v === 'sampled_legacy' ? <Tag color="orange">旧日志预览</Tag> : <Tag>手动</Tag>,
     },
     {
+      title: '保留至',
+      dataIndex: 'expires_at',
+      key: 'expires_at',
+      width: 150,
+      render: (v: string | null) => v ? fmt(v) : <Typography.Text type="secondary">未设置（旧样本）</Typography.Text>,
+    },
+    {
       title: '标注',
       dataIndex: 'label',
       key: 'label',
@@ -309,7 +326,7 @@ export default function EvalsPage() {
     {
       title: '操作',
       key: 'action',
-      width: 180,
+      width: 320,
       render: (_, r) => (
         <Space size={4}>
           <Button
@@ -327,6 +344,28 @@ export default function EvalsPage() {
           >
             标差
           </Button>
+          {!r.expires_at ? (
+            <Tooltip title="旧样本须先在隔离环境盘点、备份，再用逐 ID 清理工具删除">
+              <span>
+                <Button size="small" danger disabled>
+                  先盘点/备份
+                </Button>
+              </span>
+            </Tooltip>
+          ) : (
+            <Popconfirm
+              title={`删除样本 #${r.id}？`}
+              description="样本及已保存报告中的对应文本会清除，无法恢复。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void handleDeleteSample(r.id)}
+            >
+              <Button size="small" danger>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -435,7 +474,7 @@ export default function EvalsPage() {
         <div>
           <Typography.Title level={4}>评测</Typography.Title>
           <Typography.Paragraph className="aegis-page-header-description">
-            从真实调用采样、人工打标到 A/B 回归，沉淀模型选型依据
+            手工样本仅使用合成或彻底去标识数据；新建评测样本保留 30 天并可逐条删除
           </Typography.Paragraph>
         </div>
       </div>
@@ -526,7 +565,7 @@ export default function EvalsPage() {
                             columns={sampleColumns}
                             dataSource={samples}
                             pagination={{ pageSize: 8, showTotal: (t) => `共 ${t} 条` }}
-                            locale={{ emptyText: '暂无样本，可从真实日志采样或手动添加' }}
+                            locale={{ emptyText: '暂无样本；生产 prompt capture 关闭时，请仅添加合成或彻底去标识样本' }}
                           />
                         </>
                       ),
@@ -623,12 +662,26 @@ export default function EvalsPage() {
         onCancel={() => setAddSampleOpen(false)}
         destroyOnClose
       >
+        <Alert
+          type="warning"
+          showIcon
+          message="仅可使用合成或彻底去标识的数据。新样本将在创建 30 天后自动删除。"
+          description="旧样本不会因升级而自动获得到期时间；请先盘点、备份，再按确认的范围逐条清理。"
+          style={{ marginBottom: 16 }}
+        />
         <Form form={addForm} layout="vertical">
           <Form.Item name="prompt" label="Prompt" rules={[{ required: true, message: '请输入 prompt' }]}>
             <Input.TextArea rows={4} />
           </Form.Item>
           <Form.Item name="reference" label="参考答案（可选）">
             <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item
+            name="confirm_synthetic_or_deidentified"
+            valuePropName="checked"
+            rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error('请先确认样本内容符合要求')) }]}
+          >
+            <Checkbox>我确认此样本为合成数据或已彻底去标识</Checkbox>
           </Form.Item>
         </Form>
       </Modal>

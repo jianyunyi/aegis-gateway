@@ -113,7 +113,7 @@ func TestApplyIntegrationUpgradesExistingSchemaAndPreservesRows(t *testing.T) {
 	if err := db.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.Join(versions, ","), "001_init,002_eval_prompt_storage,003_api_key_accounting,004_usage_estimated"; got != want {
+	if got, want := strings.Join(versions, ","), "001_init,002_eval_prompt_storage,003_api_key_accounting,004_usage_estimated,005_eval_sample_retention"; got != want {
 		t.Fatalf("applied migrations %q, want %q", got, want)
 	}
 
@@ -139,11 +139,12 @@ func TestApplyIntegrationUpgradesExistingSchemaAndPreservesRows(t *testing.T) {
 
 	var samplePrompt string
 	var chatMessages sql.NullString
-	if err := db.Raw("SELECT prompt, chat_messages FROM eval_samples WHERE dataset_id = ?", 9).Row().Scan(&samplePrompt, &chatMessages); err != nil {
+	var expiresAt, policyConfirmedAt sql.NullTime
+	if err := db.Raw("SELECT prompt, chat_messages, expires_at, manual_policy_confirmed_at FROM eval_samples WHERE dataset_id = ?", 9).Row().Scan(&samplePrompt, &chatMessages, &expiresAt, &policyConfirmedAt); err != nil {
 		t.Fatal(err)
 	}
-	if samplePrompt != "legacy benchmark prompt" || chatMessages.Valid {
-		t.Fatalf("evaluation sample changed during upgrade: prompt=%q chat_messages=%v", samplePrompt, chatMessages)
+	if samplePrompt != "legacy benchmark prompt" || chatMessages.Valid || expiresAt.Valid || policyConfirmedAt.Valid {
+		t.Fatalf("legacy evaluation sample changed during upgrade: prompt=%q chat_messages=%v expires_at=%v policy_confirmed_at=%v", samplePrompt, chatMessages, expiresAt, policyConfirmedAt)
 	}
 }
 

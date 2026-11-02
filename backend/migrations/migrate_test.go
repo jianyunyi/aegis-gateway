@@ -113,3 +113,22 @@ func TestUsageEstimateMigrationIsIdempotent(t *testing.T) {
 		t.Fatalf("004 split %d statements, want 5", len(statements))
 	}
 }
+
+func TestManualSampleRetentionMigrationLeavesLegacyRowsUnchanged(t *testing.T) {
+	migration, err := files.ReadFile("005_eval_sample_retention.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(migration)
+	for _, token := range []string{"information_schema.columns", "expires_at", "manual_policy_confirmed_at", "idx_eval_samples_expires_at"} {
+		if !strings.Contains(source, token) {
+			t.Fatalf("005 migration missing %q", token)
+		}
+	}
+	if strings.Contains(strings.ToUpper(source), "UPDATE EVAL_SAMPLES") {
+		t.Fatal("005 must not assign retention to legacy samples before operator review")
+	}
+	if statements := splitStatements(source); len(statements) != 13 {
+		t.Fatalf("005 split %d statements, want 13", len(statements))
+	}
+}

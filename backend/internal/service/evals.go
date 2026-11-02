@@ -59,6 +59,9 @@ func (s *EvalService) ListSamples(datasetID uint64) ([]model.EvalSample, error) 
 
 // AddSample 手动添加样本。
 func (s *EvalService) AddSample(datasetID uint64, prompt, reference, source string) error {
+	if source == "manual" {
+		return s.AddManualSample(datasetID, prompt, reference, false)
+	}
 	return s.repo.DB.Create(&model.EvalSample{
 		DatasetID: datasetID, Prompt: prompt, Reference: reference, Source: source,
 	}).Error
@@ -140,8 +143,11 @@ func (s *EvalService) SampleFromLogs(datasetID uint64, count int, modelName stri
 		}
 		seen[key] = true
 		seen[promptKey] = true
+		createdAt := time.Now().UTC()
+		expiresAt := createdAt.Add(EvalSampleRetention)
 		if err := s.repo.DB.Create(&model.EvalSample{
 			DatasetID: datasetID, Prompt: prompt, ChatMessages: messages, Source: source,
+			CreatedAt: createdAt, ExpiresAt: &expiresAt,
 		}).Error; err != nil {
 			return added, err
 		}

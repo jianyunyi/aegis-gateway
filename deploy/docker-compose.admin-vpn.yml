@@ -1,0 +1,29 @@
+# Optional, VPN-only admin ingress. Compose paths are relative to docker-compose.yml.
+services:
+  tailscale-admin:
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:stable}
+    network_mode: "service:web"
+    depends_on:
+      web:
+        condition: service_started
+    environment:
+      TS_AUTHKEY: "${TS_AUTHKEY:?read the tagged Tailscale auth key from the local secret file}"
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: aegis-admin
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_EXTRA_ARGS: --advertise-tags=tag:aegis-admin
+    volumes:
+      - tailscale-admin-state:/var/lib/tailscale
+      # Tailscale requires the serve-config directory to be mounted, not a single file.
+      - ./admin-vpn:/config:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+volumes:
+  tailscale-admin-state:

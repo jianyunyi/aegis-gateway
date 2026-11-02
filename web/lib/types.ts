@@ -169,6 +169,7 @@ export interface EvalSample {
   source: string; // sampled / sampled_legacy / manual
   label: number | null; // 1 好 / 0 差 / null 未标
   created_at: string;
+  expires_at: string | null;
 }
 
 /** 评测运行（与后端 eval_runs 表对齐） */

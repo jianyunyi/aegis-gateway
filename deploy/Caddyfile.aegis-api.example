@@ -1,0 +1,13 @@
+# Copy into the trusted edge proxy's Caddyfile and replace the hostname.
+# Caddy provisions HTTPS automatically for this public API host.
+api.example.com {
+	@aegis_api path /v1 /v1/*
+	handle @aegis_api {
+		reverse_proxy 127.0.0.1:8081
+	}
+
+	# Default-deny: /login, /api/v1/admin/*, /readyz and every other path.
+	handle {
+		respond "not found" 404
+	}
+}

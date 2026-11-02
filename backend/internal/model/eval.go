@@ -17,14 +17,16 @@ func (EvalDataset) TableName() string { return "eval_datasets" }
 
 // EvalSample 评测样本：来自真实调用采样或人工录入。
 type EvalSample struct {
-	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
-	DatasetID    uint64    `gorm:"not null;index" json:"dataset_id"`
-	Prompt       string    `gorm:"type:text;not null" json:"prompt"`
-	ChatMessages string    `gorm:"type:text" json:"-"`                            // 内部保存的完整 OpenAI 聊天上下文，不由样本 API 返回
-	Reference    string    `gorm:"type:text" json:"reference"`                    // 参考答案（可选）
-	Source       string    `gorm:"size:16;not null;default:manual" json:"source"` // sampled / manual
-	Label        *int8     `json:"label"`                                         // 人工标注：1 好 0 差 NULL 未标
-	CreatedAt    time.Time `json:"created_at"`
+	ID                      uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	DatasetID               uint64     `gorm:"not null;index" json:"dataset_id"`
+	Prompt                  string     `gorm:"type:text;not null" json:"prompt"`
+	ChatMessages            string     `gorm:"type:text" json:"-"`                            // 内部保存的完整 OpenAI 聊天上下文，不由样本 API 返回
+	Reference               string     `gorm:"type:text" json:"reference"`                    // 参考答案（可选）
+	Source                  string     `gorm:"size:16;not null;default:manual" json:"source"` // sampled / manual
+	Label                   *int8      `json:"label"`                                         // 人工标注：1 好 0 差 NULL 未标
+	CreatedAt               time.Time  `json:"created_at"`
+	ExpiresAt               *time.Time `gorm:"index:idx_eval_samples_expires_at" json:"expires_at"`
+	ManualPolicyConfirmedAt *time.Time `json:"-"`
 }
 
 // TableName 指定表名。
