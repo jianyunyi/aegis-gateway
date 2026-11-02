@@ -107,6 +107,12 @@ func (c *Config) Validate() error {
 	default:
 		return errors.New("APP_ENV must be dev, test, or prod")
 	}
+	if c.IsProduction() {
+		captureSetting, configured := os.LookupEnv("PROMPT_CAPTURE_ENABLED")
+		if !configured || !strings.EqualFold(strings.TrimSpace(captureSetting), "false") || c.CapturePrompts {
+			return errors.New("PROMPT_CAPTURE_ENABLED must be explicitly set to false in production")
+		}
+	}
 	if len([]byte(c.JWTSecret)) < 32 || c.JWTSecret == "dev-only-secret-change-before-deploy" {
 		return errors.New("JWT_SECRET must be explicitly set to at least 32 bytes in production")
 	}

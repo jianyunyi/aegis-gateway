@@ -10,7 +10,8 @@ x-gateway-env: &gateway-env
   SEED_DATA: "${SEED_DATA:-false}"
   BOOTSTRAP_ADMIN_USERNAME: "${BOOTSTRAP_ADMIN_USERNAME:-}"
   BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
-  PROMPT_CAPTURE_ENABLED: "${PROMPT_CAPTURE_ENABLED:-false}"
+  # Production policy: prompt collection remains disabled regardless of .env.
+  PROMPT_CAPTURE_ENABLED: "false"
   PROMPT_RETENTION_DAYS: "${PROMPT_RETENTION_DAYS:-30}"
   MAX_REQUEST_BODY_BYTES: "${MAX_REQUEST_BODY_BYTES:-2097152}"
   RATE_LIMIT_FAIL_OPEN: "false"

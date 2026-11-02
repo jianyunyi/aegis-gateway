@@ -83,6 +83,7 @@ func TestPrivacyCollectionIsOptIn(t *testing.T) {
 
 func TestProductionConfigurationRequiresExplicitSecretsAndSafeModes(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "false")
 	t.Setenv("JWT_SECRET", "")
 	t.Setenv("REDIS_PASSWORD", "")
 	t.Setenv("MYSQL_DSN", "root:root@tcp(mysql:3306)/aegis")
@@ -104,6 +105,15 @@ func TestProductionConfigurationRequiresExplicitSecretsAndSafeModes(t *testing.T
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("safe production config rejected: %v", err)
 	}
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "")
+	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "PROMPT_CAPTURE_ENABLED") {
+		t.Fatalf("production must reject an unset PROMPT_CAPTURE_ENABLED value: %v", err)
+	}
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "true")
+	if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), "PROMPT_CAPTURE_ENABLED") {
+		t.Fatalf("production must reject enabled prompt capture: %v", err)
+	}
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "false")
 
 	t.Setenv("AUTO_MIGRATE", "true")
 	if err := Load().Validate(); err == nil {
@@ -113,6 +123,7 @@ func TestProductionConfigurationRequiresExplicitSecretsAndSafeModes(t *testing.T
 
 func TestProductionSeedRequiresUniqueAdminCredentials(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "false")
 	t.Setenv("JWT_SECRET", strings.Repeat("s", 40))
 	t.Setenv("REDIS_PASSWORD", "redis-test-password")
 	t.Setenv("MYSQL_DSN", "aegis_app:secret@tcp(mysql:3306)/aegis")
@@ -132,6 +143,7 @@ func TestProductionSeedRequiresUniqueAdminCredentials(t *testing.T) {
 
 func TestProductionAliasNeverUsesDevelopmentDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "false")
 	t.Setenv("JWT_SECRET", "")
 	t.Setenv("MYSQL_DSN", "root:root@tcp(mysql:3306)/aegis")
 	t.Setenv("REDIS_PASSWORD", "")
@@ -175,6 +187,7 @@ func TestUnreadableSecretFileFailsClosedWithoutEnvironmentFallback(t *testing.T)
 
 func TestAllProductionSecretsCanBeLoadedFromFiles(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "false")
 	t.Setenv("AUTO_MIGRATE", "false")
 	t.Setenv("SEED_DATA", "true")
 	t.Setenv("BOOTSTRAP_ADMIN_USERNAME", "owner")
