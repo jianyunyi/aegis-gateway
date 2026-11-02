@@ -37,7 +37,8 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "--silent"]
+      # The initialization-only MySQL server uses a local socket; wait for TCP before migrations.
+      test: ["CMD", "mysqladmin", "--protocol=TCP", "--host=127.0.0.1", "ping", "--silent"]
       interval: 5s
       timeout: 3s
       retries: 20
