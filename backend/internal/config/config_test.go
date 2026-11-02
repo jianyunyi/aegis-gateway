@@ -51,11 +51,16 @@ func TestTrustedProxyCIDRsRequireValidNarrowCIDRs(t *testing.T) {
 		t.Fatalf("valid proxy CIDRs rejected: %v", err)
 	}
 
-	for _, invalid := range []string{"10.0.1.4", "not-a-cidr", "0.0.0.0/0", "::/0"} {
+	for _, invalid := range []string{"10.0.1.4", "not-a-cidr", "0.0.0.0/0", "::/0", "::ffff:0:0/96", "::/80", "::fffe:0:0/95"} {
 		t.Setenv("TRUSTED_PROXY_CIDRS", invalid)
 		if err := Load().Validate(); err == nil {
 			t.Errorf("unsafe trusted proxy CIDR %q was accepted", invalid)
 		}
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "::ffff:192.0.2.1/128")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("narrow IPv4-mapped proxy CIDR rejected: %v", err)
 	}
 }
 
@@ -66,6 +71,10 @@ func TestPrivacyCollectionIsOptIn(t *testing.T) {
 	cfg := Load()
 	if cfg.CapturePrompts || cfg.SeedData {
 		t.Fatal("prompt capture and seed data must be disabled by default")
+	}
+	t.Setenv("PROMPT_CAPTURE_ENABLED", "false")
+	if Load().CapturePrompts {
+		t.Fatal("prompt capture must remain disabled when explicitly false")
 	}
 	if cfg.PromptRetentionDays != 30 || cfg.MaxRequestBodyBytes <= 0 {
 		t.Fatalf("unexpected safe defaults: retention=%d body_limit=%d", cfg.PromptRetentionDays, cfg.MaxRequestBodyBytes)

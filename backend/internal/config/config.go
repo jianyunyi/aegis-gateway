@@ -4,7 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -86,13 +86,15 @@ func (c *Config) Validate() error {
 		return errors.New("MAX_REQUEST_BODY_BYTES must be between 1024 and 16777216")
 	}
 	for _, cidr := range c.TrustedProxyCIDRs {
-		_, network, err := net.ParseCIDR(cidr)
+		prefix, err := netip.ParsePrefix(cidr)
 		if err != nil {
 			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q must be a valid CIDR", cidr)
 		}
-		prefix, _ := network.Mask.Size()
-		if prefix == 0 {
+		if prefix.Bits() == 0 {
 			return errors.New("TRUSTED_PROXY_CIDRS must not trust all IP addresses")
+		}
+		if prefix.Contains(netip.MustParseAddr("::ffff:0:0")) && prefix.Contains(netip.MustParseAddr("::ffff:ffff:ffff")) {
+			return fmt.Errorf("TRUSTED_PROXY_CIDRS entry %q must not cover the entire IPv4-mapped address range", cidr)
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Env)) {
