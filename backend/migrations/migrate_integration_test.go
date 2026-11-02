@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -51,6 +52,98 @@ func TestApplyIntegrationSerializesExecutorsAndRecordsOnce(t *testing.T) {
 	}
 	if migrations != 1 || probes != 1 {
 		t.Fatalf("migration recorded %d times and probe has %d rows, want 1 and 1", migrations, probes)
+	}
+}
+
+func TestApplyIntegrationUpgradesExistingSchemaAndPreservesRows(t *testing.T) {
+	db := newIsolatedMySQL(t)
+	baseline, err := files.ReadFile("001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingColumns := []string{"used_tokens", "default_model", "budget_monthly", "prompt_preview", "prompt_for_eval", "chat_messages", "usage_estimated"}
+	found := make(map[string]bool, len(missingColumns))
+	var legacyLines []string
+	for _, line := range strings.Split(string(baseline), "\n") {
+		trimmed := strings.TrimSpace(line)
+		remove := false
+		for _, column := range missingColumns {
+			if strings.HasPrefix(trimmed, column+" ") {
+				found[column] = true
+				remove = true
+				break
+			}
+		}
+		if !remove {
+			legacyLines = append(legacyLines, line)
+		}
+	}
+	if len(found) != len(missingColumns) {
+		t.Fatalf("legacy schema fixture did not remove all expected columns: found %v", found)
+	}
+	legacyBaseline := strings.Join(legacyLines, "\n")
+	legacyFS := fstest.MapFS{
+		"001_init.sql": &fstest.MapFile{Data: []byte(legacyBaseline)},
+	}
+	if err := applyWithFS(context.Background(), db, legacyFS); err != nil {
+		t.Fatalf("create existing legacy schema: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO api_keys (id, name, key_hash, key_prefix, user_id, status, quota_tokens, rps_limit, burst, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))`, 41, "existing key", strings.Repeat("a", 64), "ak_legacy", 7, 1, 12345, 10, 20).Error; err != nil {
+		t.Fatalf("seed existing API key: %v", err)
+	}
+	requestID := strings.Repeat("c", 32)
+	if err := db.Exec(`INSERT INTO usage_logs (request_id, api_key_id, model_name, kind, prompt_tokens, completion_tokens, total_tokens, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))`, requestID, 41, "legacy-model", "chat", 11, 5, 16, 0).Error; err != nil {
+		t.Fatalf("seed existing usage row: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO eval_samples (dataset_id, prompt, source, created_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP(3))`, 9, "legacy benchmark prompt", "manual").Error; err != nil {
+		t.Fatalf("seed existing evaluation sample: %v", err)
+	}
+
+	if err := Apply(context.Background(), db); err != nil {
+		t.Fatalf("upgrade existing schema: %v", err)
+	}
+	if err := Apply(context.Background(), db); err != nil {
+		t.Fatalf("repeat upgrade after completion: %v", err)
+	}
+
+	var versions []string
+	if err := db.Raw("SELECT version FROM schema_migrations ORDER BY version").Scan(&versions).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(versions, ","), "001_init,002_eval_prompt_storage,003_api_key_accounting,004_usage_estimated"; got != want {
+		t.Fatalf("applied migrations %q, want %q", got, want)
+	}
+
+	var keyQuota, keyUsed int64
+	var keyDefaultModel string
+	var keyBudget float64
+	if err := db.Raw("SELECT quota_tokens, used_tokens, default_model, budget_monthly FROM api_keys WHERE id = ?", 41).Row().Scan(&keyQuota, &keyUsed, &keyDefaultModel, &keyBudget); err != nil {
+		t.Fatal(err)
+	}
+	if keyQuota != 12345 || keyUsed != 0 || keyDefaultModel != "" || keyBudget != 0 {
+		t.Fatalf("API key data changed during upgrade: quota=%d used=%d model=%q budget=%f", keyQuota, keyUsed, keyDefaultModel, keyBudget)
+	}
+
+	var gotRequestID, gotModel string
+	var preview, promptForEval sql.NullString
+	var estimated int
+	if err := db.Raw("SELECT request_id, model_name, prompt_preview, prompt_for_eval, usage_estimated FROM usage_logs WHERE request_id = ?", requestID).Row().Scan(&gotRequestID, &gotModel, &preview, &promptForEval, &estimated); err != nil {
+		t.Fatal(err)
+	}
+	if gotRequestID != requestID || gotModel != "legacy-model" || preview.Valid || promptForEval.Valid || estimated != 0 {
+		t.Fatalf("usage data changed during upgrade: id=%q model=%q preview=%v prompt=%v estimated=%d", gotRequestID, gotModel, preview, promptForEval, estimated)
+	}
+
+	var samplePrompt string
+	var chatMessages sql.NullString
+	if err := db.Raw("SELECT prompt, chat_messages FROM eval_samples WHERE dataset_id = ?", 9).Row().Scan(&samplePrompt, &chatMessages); err != nil {
+		t.Fatal(err)
+	}
+	if samplePrompt != "legacy benchmark prompt" || chatMessages.Valid {
+		t.Fatalf("evaluation sample changed during upgrade: prompt=%q chat_messages=%v", samplePrompt, chatMessages)
 	}
 }
 
